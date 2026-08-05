@@ -36,7 +36,7 @@ class BioSequenceDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         return {
-            "name": row["Name"],
+            "name": row["Variant_ID"],
             "ref_seq": row[self.ref_col],
             "alt_seq": row[self.alt_col]
         }
@@ -79,6 +79,15 @@ class FeatureExtractor:
             llrs.append(llr.item())
             
         return torch.tensor(llrs, dtype=torch.float16)
+
+    def _get_hidden_states_safe(self, outputs_emb):
+        """Hàm hỗ trợ trích xuất hidden states an toàn cho mọi kiến trúc (bao gồm ESMC)"""
+        if hasattr(outputs_emb, "hidden_states") and outputs_emb.hidden_states is not None:
+            return outputs_emb.hidden_states[-1]
+        elif isinstance(outputs_emb, dict) and "hidden_states" in outputs_emb:
+            return outputs_emb["hidden_states"][-1]
+        else:
+            return outputs_emb[0]
 
     def _extract_poolings(self, hidden_states, attention_mask, variant_indices):
         """Trích xuất 3 loại vector nhúng: Center, Mean, CLS"""
@@ -131,32 +140,40 @@ class FeatureExtractor:
                 # Giải phóng RAM lập tức cho biến logits khổng lồ
                 del outputs_llr
                 
-                # 3. Tính Embeddings (Chạy chuỗi nguyên bản Ref)
-                outputs_emb = self.model(
+                # =======================================================
+                # 3. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI REF
+                # =======================================================
+                outputs_ref = self.model(
                     input_ids=inputs_ref["input_ids"], 
                     attention_mask=inputs_ref["attention_mask"], 
                     output_hidden_states=True
                 )
+                hidden_ref = self._get_hidden_states_safe(outputs_ref)
+                cls_ref, center_ref, mean_ref = self._extract_poolings(hidden_ref, inputs_ref["attention_mask"], var_indices)
+                del outputs_ref, hidden_ref
                 
-                # --- BẢN VÁ: Trích xuất hidden_states an toàn cho mọi kiến trúc (bao gồm ESMC) ---
-                if hasattr(outputs_emb, "hidden_states") and outputs_emb.hidden_states is not None:
-                    hidden_states = outputs_emb.hidden_states[-1] # Lấy layer cuối
-                elif isinstance(outputs_emb, dict) and "hidden_states" in outputs_emb:
-                    hidden_states = outputs_emb["hidden_states"][-1]
-                else:
-                    # Fallback cho dạng tuple/list (thường hidden states layer cuối nằm ở index 0 của tuple)
-                    hidden_states = outputs_emb[0]
-                # ---------------------------------------------------------------------------------
-                
-                cls_emb, center_emb, mean_emb = self._extract_poolings(hidden_states, inputs_ref["attention_mask"], var_indices)
+                # =======================================================
+                # 4. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI ALT
+                # =======================================================
+                outputs_alt = self.model(
+                    input_ids=inputs_alt["input_ids"], 
+                    attention_mask=inputs_alt["attention_mask"], 
+                    output_hidden_states=True
+                )
+                hidden_alt = self._get_hidden_states_safe(outputs_alt)
+                cls_alt, center_alt, mean_alt = self._extract_poolings(hidden_alt, inputs_alt["attention_mask"], var_indices)
+                del outputs_alt, hidden_alt
                 
                 # Chuyển đổi về CPU float16 NumPy để lưu trữ
                 return {
                     "names": names,
                     "llr": llr_scores.cpu().numpy(),
-                    "cls": cls_emb.cpu().numpy().astype(np.float16),
-                    "center": center_emb.cpu().numpy().astype(np.float16),
-                    "mean": mean_emb.cpu().numpy().astype(np.float16)
+                    "cls_ref": cls_ref.cpu().numpy().astype(np.float16),
+                    "cls_alt": cls_alt.cpu().numpy().astype(np.float16),
+                    "center_ref": center_ref.cpu().numpy().astype(np.float16),
+                    "center_alt": center_alt.cpu().numpy().astype(np.float16),
+                    "mean_ref": mean_ref.cpu().numpy().astype(np.float16),
+                    "mean_alt": mean_alt.cpu().numpy().astype(np.float16)
                 }
                 
         except RuntimeError as e:
@@ -186,7 +203,12 @@ class FeatureExtractor:
         dataset = BioSequenceDataset(parquet_path, seq_type)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
-        all_results = {"names": [], "llr": [], "cls": [], "center": [], "mean": []}
+        all_results = {
+            "names": [], "llr": [], 
+            "cls_ref": [], "cls_alt": [], 
+            "center_ref": [], "center_alt": [], 
+            "mean_ref": [], "mean_alt": []
+        }
         
         print(f"[*] Đang trích xuất: {parquet_path}")
         for batch in tqdm(dataloader, desc="Inference"):
@@ -204,14 +226,17 @@ class FeatureExtractor:
         
         poolings = ["cls", "center", "mean"]
         for p in poolings:
-            final_emb = torch.tensor(np.concatenate(all_results[p]))
+            e_ref_tensor = torch.tensor(np.concatenate(all_results[f"{p}_ref"]))
+            e_alt_tensor = torch.tensor(np.concatenate(all_results[f"{p}_alt"]))
+            
             output_dict = {
                 "metadata": all_results["names"],
                 "llr": final_llr,
-                "embeddings": final_emb
+                "E_ref": e_ref_tensor,
+                "E_alt": e_alt_tensor
             }
             save_path = f"{output_prefix}_{p}.pt"
             torch.save(output_dict, save_path)
-            print(f"  -> Đã lưu: {save_path}")
+            print(f"  -> Đã lưu: {save_path} (Bao gồm E_ref và E_alt)")
             
         print("[+] Hoàn tất trích xuất!\n")
