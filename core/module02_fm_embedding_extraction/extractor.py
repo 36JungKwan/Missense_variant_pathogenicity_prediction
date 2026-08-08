@@ -107,7 +107,7 @@ class FeatureExtractor:
         
         return cls_pooling, center_pooling, mean_pooling
 
-    def _process_batch_with_oom_protection(self, batch_data, seq_type):
+    def _process_batch_with_oom_protection(self, batch_data, seq_type, profiler=None):
         """Xử lý forward pass an toàn, đệ quy chia đôi batch nếu tràn RAM (OOM)"""
         names = batch_data["name"]
         ref_seqs = batch_data["ref_seq"]
@@ -126,14 +126,23 @@ class FeatureExtractor:
                 ref_ids = [inputs_ref["input_ids"][i, var_indices[i]].item() for i in range(batch_size)]
                 alt_ids = [inputs_alt["input_ids"][i, var_indices[i]].item() for i in range(batch_size)]
 
+                if profiler is not None and not profiler._gflops_measured:
+                    # Truyền đúng kích thước batch=1 để tính GFLOPs per sample
+                    dummy_inputs = (inputs_ref["input_ids"][0:1], inputs_ref["attention_mask"][0:1])
+                    profiler.measure_gflops(self.model, dummy_inputs)
+
                 # 2. Tính LLR (Log-Likelihood Ratio)
                 if self.manager.model_type == "mlm":
                     # Masked LM: Chạy chuỗi bị MASK (Tái sử dụng input_ids từ inputs_ref)
                     masked_input_ids = self.manager.prepare_masked_inputs(inputs_ref["input_ids"], var_indices)
+                    if profiler is not None: profiler.tic()
                     outputs_llr = self.model(input_ids=masked_input_ids, attention_mask=inputs_ref["attention_mask"])
+                    if profiler is not None: profiler.toc()
                 else:
                     # Causal LM: Chạy thẳng chuỗi Ref
+                    if profiler is not None: profiler.tic()
                     outputs_llr = self.model(input_ids=inputs_ref["input_ids"], attention_mask=inputs_ref["attention_mask"])
+                    if profiler is not None: profiler.toc()
                 
                 llr_scores = self._compute_llr(outputs_llr.logits, var_indices, ref_ids, alt_ids)
                 
@@ -143,11 +152,13 @@ class FeatureExtractor:
                 # =======================================================
                 # 3. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI REF
                 # =======================================================
+                if profiler is not None: profiler.toc()
                 outputs_ref = self.model(
                     input_ids=inputs_ref["input_ids"], 
                     attention_mask=inputs_ref["attention_mask"], 
                     output_hidden_states=True
                 )
+                if profiler is not None: profiler.toc()
                 hidden_ref = self._get_hidden_states_safe(outputs_ref)
                 cls_ref, center_ref, mean_ref = self._extract_poolings(hidden_ref, inputs_ref["attention_mask"], var_indices)
                 del outputs_ref, hidden_ref
@@ -155,11 +166,14 @@ class FeatureExtractor:
                 # =======================================================
                 # 4. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI ALT
                 # =======================================================
+                if profiler is not None: profiler.tic()
                 outputs_alt = self.model(
                     input_ids=inputs_alt["input_ids"], 
                     attention_mask=inputs_alt["attention_mask"], 
                     output_hidden_states=True
                 )
+                if profiler is not None: profiler.toc()
+
                 hidden_alt = self._get_hidden_states_safe(outputs_alt)
                 cls_alt, center_alt, mean_alt = self._extract_poolings(hidden_alt, inputs_alt["attention_mask"], var_indices)
                 del outputs_alt, hidden_alt
@@ -190,15 +204,15 @@ class FeatureExtractor:
                 batch_part_1 = {k: v[:mid] for k, v in batch_data.items()}
                 batch_part_2 = {k: v[mid:] for k, v in batch_data.items()}
                 
-                res_1 = self._process_batch_with_oom_protection(batch_part_1, seq_type)
-                res_2 = self._process_batch_with_oom_protection(batch_part_2, seq_type)
-                
+                res_1 = self._process_batch_with_oom_protection(batch_part_1, seq_type, profiler)
+                res_2 = self._process_batch_with_oom_protection(batch_part_2, seq_type, profiler)
+
                 # Gộp kết quả
                 return {k: np.concatenate([res_1[k], res_2[k]]) if k != "names" else res_1[k] + res_2[k] for k in res_1.keys()}
             else:
                 raise e
 
-    def run_extraction(self, parquet_path: str, seq_type: str, batch_size: int, output_prefix: str):
+    def run_extraction(self, parquet_path: str, seq_type: str, batch_size: int, output_prefix: str, profiler=None):
         """Chạy toàn bộ file Parquet và lưu 3 file .pt cho 3 chiến lược pooling"""
         dataset = BioSequenceDataset(parquet_path, seq_type)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -209,7 +223,10 @@ class FeatureExtractor:
             "center_ref": [], "center_alt": [], 
             "mean_ref": [], "mean_alt": []
         }
-        
+
+        if profiler is not None:
+            profiler.reset_peak_memory()
+
         print(f"[*] Đang trích xuất: {parquet_path}")
         for batch in tqdm(dataloader, desc="Inference"):
             res = self._process_batch_with_oom_protection(batch, seq_type)
@@ -219,6 +236,9 @@ class FeatureExtractor:
                 else:
                     all_results[k].append(res[k])
                     
+        if profiler is not None:
+            profiler.calculate_final_metrics(num_samples=len(dataset))
+
         print("[*] Đang lưu các ma trận đặc trưng...")
         
         # Nối tất cả numpy arrays và đóng gói thành Tensor

@@ -117,5 +117,7 @@ class VariantFusionDataset(Dataset):
         
         if self.labels is not None:
             sample["label"] = self.labels[idx].unsqueeze(0) 
+
+        sample["variant_id"] = self.df["Variant_ID"].values[idx]
             
         return sample
