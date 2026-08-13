@@ -3,6 +3,7 @@ import json
 import time
 import torch
 import numpy as np
+import warnings
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     matthews_corrcoef, roc_auc_score, average_precision_score, confusion_matrix
@@ -16,7 +17,10 @@ except ImportError:
 class FusionEvaluatorProfiler:
     """
     Trình đánh giá và đo lường End-to-End cho Module 5.
-    V2: Vá lỗi Peak VRAM ảo, chống crash khi dữ liệu thiếu class, an toàn IO.
+    Bản vá V4 (Ablation-Aware & Bulletproof):
+    - Tự động bỏ qua tính toán GFLOPs cho các phương thức bị tắt.
+    - Ép kiểu Integer an toàn cho Sklearn, chống crash do Float/Continuous targets.
+    - Đóng băng NaN (NaN Shield) khi mạng bị Exploding Gradients.
     """
     def __init__(self, tensorboard_dir: str, fm_profile_json: str, device: torch.device):
         self.device = device
@@ -37,26 +41,37 @@ class FusionEvaluatorProfiler:
         self._total_inference_time = 0.0
 
     # =========================================================================
-    # 1. TÍNH TOÁN 8 CHỈ SỐ PHÂN LOẠI
+    # 1. TÍNH TOÁN 8 CHỈ SỐ PHÂN LOẠI (AN TOÀN TUYỆT ĐỐI)
     # =========================================================================
     def compute_metrics(self, y_true: np.ndarray, y_probs: np.ndarray, y_preds: np.ndarray) -> dict:
-        tn, fp, fn, tp = confusion_matrix(y_true, y_preds, labels=[0, 1]).ravel()
+        # [BẢN VÁ 1] Ép kiểu an toàn (Integer Casting) để Scikit-Learn không văng lỗi Type Mismatch
+        y_true_int = np.asarray(y_true, dtype=int)
+        y_preds_int = np.asarray(y_preds, dtype=int)
         
-        acc = accuracy_score(y_true, y_preds)
-        prec = precision_score(y_true, y_preds, zero_division=0)
-        rec = recall_score(y_true, y_preds, zero_division=0)
-        spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-        f1 = f1_score(y_true, y_preds, zero_division=0)
-        mcc = matthews_corrcoef(y_true, y_preds)
-        
-        # [BẢN VÁ 2] Chống sập hệ thống khi tập dữ liệu chỉ có 1 class (thường gặp ở tập mẫu nhỏ)
-        if len(np.unique(y_true)) > 1:
-            auroc = roc_auc_score(y_true, y_probs)
-            auprc = average_precision_score(y_true, y_probs)
-        else:
-            auroc = 0.0
-            auprc = 0.0
-            print("[CẢNH BÁO] Tập dữ liệu đánh giá chỉ chứa 1 Class (Toàn 0 hoặc toàn 1). AUROC/AUPRC = 0.0")
+        # [BẢN VÁ 2] Lá chắn bảo vệ NaN (NaN Shield)
+        y_probs_safe = np.nan_to_num(y_probs, nan=0.0, posinf=1.0, neginf=0.0)
+
+        # Tránh báo lỗi cảnh báo không cần thiết của sklearn
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            
+            tn, fp, fn, tp = confusion_matrix(y_true_int, y_preds_int, labels=[0, 1]).ravel()
+            
+            acc = accuracy_score(y_true_int, y_preds_int)
+            prec = precision_score(y_true_int, y_preds_int, zero_division=0)
+            rec = recall_score(y_true_int, y_preds_int, zero_division=0)
+            spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            f1 = f1_score(y_true_int, y_preds_int, zero_division=0)
+            mcc = matthews_corrcoef(y_true_int, y_preds_int)
+            
+            # [BẢN VÁ CŨ] Chống sập hệ thống khi tập dữ liệu chỉ có 1 class
+            if len(np.unique(y_true_int)) > 1:
+                auroc = roc_auc_score(y_true_int, y_probs_safe)
+                auprc = average_precision_score(y_true_int, y_probs_safe)
+            else:
+                auroc = 0.0
+                auprc = 0.0
+                print("[CẢNH BÁO] Tập dữ liệu đánh giá chỉ chứa 1 Class. AUROC/AUPRC = 0.0")
         
         return {
             "Accuracy": round(acc, 4),
@@ -81,14 +96,13 @@ class FusionEvaluatorProfiler:
         self.fusion_metrics["param_memory_mb"] = round(param_mem_mb, 2)
         
         try:
-            # Lưu ý: dummy_inputs phải là tuple chứa đủ (v_dna, v_prot, bio, geom)
             macs, _ = profile(model, inputs=dummy_inputs, verbose=False)
             gflops = (macs * 2) / (10 ** 9)
             self.fusion_metrics["gflops_per_sample"] = round(gflops, 6)
         except Exception as e:
             print(f"[CẢNH BÁO] thop không thể đo GFLOPs cho Fusion Model: {e}")
+            self.fusion_metrics["gflops_per_sample"] = 0.0
 
-    # [BẢN VÁ 1] Làm sạch bộ đếm Peak VRAM trước khi vào Inference
     def reset_memory_stats(self):
         if self.device.type == 'cuda':
             torch.cuda.empty_cache()
@@ -114,12 +128,15 @@ class FusionEvaluatorProfiler:
         self._total_inference_time = 0.0 
 
     # =========================================================================
-    # 3. TỔNG HỢP END-TO-END (Cộng gộp với Foundation Models)
+    # 3. TỔNG HỢP END-TO-END THÔNG MINH (Ablation-Aware Aggregation)
     # =========================================================================
-    def get_e2e_profiling(self, dna_model_name: str, prot_model_name: str) -> dict:
+    def get_e2e_profiling(self, dna_model_name: str, prot_model_name: str, active_modalities: list = None) -> dict:
+        if active_modalities is None:
+            active_modalities = ['dna', 'prot', 'bio', 'geom']
+        active_mods = [m.lower() for m in active_modalities]
+
         fm_data = {}
         if os.path.exists(self.fm_profile_json):
-            # [BẢN VÁ 3] An toàn chống lỗi khi file JSON bị rỗng/lỗi định dạng
             try:
                 with open(self.fm_profile_json, 'r') as f:
                     fm_data = json.load(f)
@@ -128,11 +145,11 @@ class FusionEvaluatorProfiler:
         else:
             print(f"[CẢNH BÁO] Không tìm thấy {self.fm_profile_json}. Báo cáo E2E sẽ thiếu số liệu FM.")
             
-        dna_stats = fm_data.get(dna_model_name, {})
-        prot_stats = fm_data.get(prot_model_name, {})
-        
         def safe_get(d, key): return d.get(key, 0.0)
 
+        dna_stats = fm_data.get(dna_model_name, {}) if 'dna' in active_mods else {}
+        prot_stats = fm_data.get(prot_model_name, {}) if 'prot' in active_mods else {}
+        
         e2e_gflops = safe_get(dna_stats, "gflops_per_sample") + safe_get(prot_stats, "gflops_per_sample") + self.fusion_metrics["gflops_per_sample"]
         e2e_latency = safe_get(dna_stats, "inference_time_ms") + safe_get(prot_stats, "inference_time_ms") + self.fusion_metrics["inference_time_ms"]
         e2e_params = safe_get(dna_stats, "num_parameters") + safe_get(prot_stats, "num_parameters") + self.fusion_metrics["num_parameters"]
