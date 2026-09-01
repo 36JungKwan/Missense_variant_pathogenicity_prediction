@@ -21,6 +21,7 @@ class BioSequenceDataset(Dataset):
         """
         self.df = pd.read_parquet(parquet_path)
         self.seq_type = seq_type
+        self.default_variant_pos = 300 if seq_type == "dna" else 50
         
         # Ánh xạ cột dựa trên loại chuỗi
         self.ref_col = "ref_seq" if seq_type == "dna" else "prot_ref_seq"
@@ -30,6 +31,25 @@ class BioSequenceDataset(Dataset):
         if self.ref_col not in self.df.columns or self.alt_col not in self.df.columns:
             raise ValueError(f"File Parquet thiếu cột {self.ref_col} hoặc {self.alt_col}")
 
+        # Tìm cột vị trí đột biến nếu có để tránh phụ thuộc hoàn toàn vào vị trí hard-code.
+        # Luu y: khong dung cot POS/pos vi thuong la toa do genomic goc,
+        # khong phai vi tri trong chuoi da dua vao tokenizer.
+        candidate_pos_cols = (
+            "variant_char_pos",
+            "mut_char_pos",
+            "mutation_pos",
+            "mut_pos",
+            "variant_pos",
+        )
+        self.variant_pos_col = next((c for c in candidate_pos_cols if c in self.df.columns), None)
+        if self.variant_pos_col is None:
+            self.variant_char_positions = np.full(len(self.df), self.default_variant_pos, dtype=np.int64)
+        else:
+            numeric_pos = pd.to_numeric(self.df[self.variant_pos_col], errors="coerce")
+            self.variant_char_positions = (
+                numeric_pos.fillna(self.default_variant_pos).astype(np.int64).to_numpy()
+            )
+
     def __len__(self):
         return len(self.df)
 
@@ -38,7 +58,8 @@ class BioSequenceDataset(Dataset):
         return {
             "name": row["Variant_ID"],
             "ref_seq": row[self.ref_col],
-            "alt_seq": row[self.alt_col]
+            "alt_seq": row[self.alt_col],
+            "variant_char_pos": int(self.variant_char_positions[idx]),
         }
 
 # ==========================================
@@ -57,8 +78,39 @@ class FeatureExtractor:
         kwargs = {"return_tensors": "pt", "padding": True, "truncation": True}
         if self.tokenizer.is_fast:
             kwargs["return_offsets_mapping"] = True
-            
-        return self.tokenizer(sequences, **kwargs).to(self.device)
+
+        tokenized = self.tokenizer(sequences, **kwargs).to(self.device)
+        return self._pad_for_ntv3_if_needed(tokenized)
+
+    def _pad_for_ntv3_if_needed(self, tokenized_outputs):
+        """Pad token length cho NTv3 de tranh loi lech kich thuoc trong down/up sampling blocks."""
+        if "ntv3" not in self.manager.model_id.lower():
+            return tokenized_outputs
+
+        input_ids = tokenized_outputs["input_ids"]
+        seq_len = int(input_ids.shape[1])
+        multiple = 64
+        target_len = ((seq_len + multiple - 1) // multiple) * multiple
+        if target_len == seq_len:
+            if "attention_mask" not in tokenized_outputs:
+                tokenized_outputs["attention_mask"] = torch.ones_like(input_ids, device=self.device)
+            return tokenized_outputs
+
+        pad_len = target_len - seq_len
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+
+        tokenized_outputs["input_ids"] = F.pad(input_ids, (0, pad_len), value=pad_id)
+
+        if "attention_mask" in tokenized_outputs:
+            tokenized_outputs["attention_mask"] = F.pad(tokenized_outputs["attention_mask"], (0, pad_len), value=0)
+        else:
+            attention_mask = torch.ones_like(input_ids, device=self.device)
+            tokenized_outputs["attention_mask"] = F.pad(attention_mask, (0, pad_len), value=0)
+
+        if "offset_mapping" in tokenized_outputs:
+            tokenized_outputs["offset_mapping"] = F.pad(tokenized_outputs["offset_mapping"], (0, 0, 0, pad_len), value=0)
+
+        return tokenized_outputs
 
     def _compute_llr(self, logits, variant_indices, ref_ids, alt_ids):
         """Tính Log-Likelihood Ratio theo đúng công thức phân phối xác suất."""
@@ -78,7 +130,7 @@ class FeatureExtractor:
             llr = log_probs[alt_ids[i]] - log_probs[ref_ids[i]]
             llrs.append(llr.item())
             
-        return torch.tensor(llrs, dtype=torch.float16)
+        return torch.tensor(llrs, dtype=torch.float32)
 
     def _get_hidden_states_safe(self, outputs_emb):
         """Hàm hỗ trợ trích xuất hidden states an toàn cho mọi kiến trúc (bao gồm ESMC)"""
@@ -112,6 +164,7 @@ class FeatureExtractor:
         names = batch_data["name"]
         ref_seqs = batch_data["ref_seq"]
         alt_seqs = batch_data["alt_seq"]
+        variant_char_pos = batch_data["variant_char_pos"]
         batch_size = len(names)
         
         try:
@@ -119,8 +172,23 @@ class FeatureExtractor:
                 # 1. Chuẩn bị token (Tokenize một lần duy nhất để tái sử dụng)
                 inputs_ref = self._tokenize_batch(ref_seqs)
                 inputs_alt = self._tokenize_batch(alt_seqs)
+
+                # Mot so tokenizer (dac biet custom remote code) co the khong tra ve attention_mask.
+                # Fallback ve mask toan 1 de giu tuong thich cho toan bo pipeline.
+                attention_mask_ref = inputs_ref.get("attention_mask")
+                if attention_mask_ref is None:
+                    attention_mask_ref = torch.ones_like(inputs_ref["input_ids"], device=self.device)
+
+                attention_mask_alt = inputs_alt.get("attention_mask")
+                if attention_mask_alt is None:
+                    attention_mask_alt = torch.ones_like(inputs_alt["input_ids"], device=self.device)
                 
-                var_indices = self.manager.get_variant_token_index(inputs_ref, seq_type)
+                var_indices = self.manager.get_variant_token_index(
+                    inputs_ref,
+                    seq_type,
+                    target_char_positions=variant_char_pos,
+                    tokenized_alt=inputs_alt,
+                )
                 
                 # Trích xuất ID của allele gốc và đột biến
                 ref_ids = [inputs_ref["input_ids"][i, var_indices[i]].item() for i in range(batch_size)]
@@ -128,7 +196,7 @@ class FeatureExtractor:
 
                 if profiler is not None and not profiler._gflops_measured:
                     # Truyền đúng kích thước batch=1 để tính GFLOPs per sample
-                    dummy_inputs = (inputs_ref["input_ids"][0:1], inputs_ref["attention_mask"][0:1])
+                    dummy_inputs = (inputs_ref["input_ids"][0:1], attention_mask_ref[0:1])
                     profiler.measure_gflops(self.model, dummy_inputs)
 
                 # 2. Tính LLR (Log-Likelihood Ratio)
@@ -136,12 +204,12 @@ class FeatureExtractor:
                     # Masked LM: Chạy chuỗi bị MASK (Tái sử dụng input_ids từ inputs_ref)
                     masked_input_ids = self.manager.prepare_masked_inputs(inputs_ref["input_ids"], var_indices)
                     if profiler is not None: profiler.tic()
-                    outputs_llr = self.model(input_ids=masked_input_ids, attention_mask=inputs_ref["attention_mask"])
+                    outputs_llr = self.model(input_ids=masked_input_ids, attention_mask=attention_mask_ref)
                     if profiler is not None: profiler.toc()
                 else:
                     # Causal LM: Chạy thẳng chuỗi Ref
                     if profiler is not None: profiler.tic()
-                    outputs_llr = self.model(input_ids=inputs_ref["input_ids"], attention_mask=inputs_ref["attention_mask"])
+                    outputs_llr = self.model(input_ids=inputs_ref["input_ids"], attention_mask=attention_mask_ref)
                     if profiler is not None: profiler.toc()
                 
                 llr_scores = self._compute_llr(outputs_llr.logits, var_indices, ref_ids, alt_ids)
@@ -152,15 +220,15 @@ class FeatureExtractor:
                 # =======================================================
                 # 3. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI REF
                 # =======================================================
-                if profiler is not None: profiler.toc()
+                if profiler is not None: profiler.tic()
                 outputs_ref = self.model(
                     input_ids=inputs_ref["input_ids"], 
-                    attention_mask=inputs_ref["attention_mask"], 
+                    attention_mask=attention_mask_ref, 
                     output_hidden_states=True
                 )
                 if profiler is not None: profiler.toc()
                 hidden_ref = self._get_hidden_states_safe(outputs_ref)
-                cls_ref, center_ref, mean_ref = self._extract_poolings(hidden_ref, inputs_ref["attention_mask"], var_indices)
+                cls_ref, center_ref, mean_ref = self._extract_poolings(hidden_ref, attention_mask_ref, var_indices)
                 del outputs_ref, hidden_ref
                 
                 # =======================================================
@@ -169,13 +237,13 @@ class FeatureExtractor:
                 if profiler is not None: profiler.tic()
                 outputs_alt = self.model(
                     input_ids=inputs_alt["input_ids"], 
-                    attention_mask=inputs_alt["attention_mask"], 
+                    attention_mask=attention_mask_alt, 
                     output_hidden_states=True
                 )
                 if profiler is not None: profiler.toc()
 
                 hidden_alt = self._get_hidden_states_safe(outputs_alt)
-                cls_alt, center_alt, mean_alt = self._extract_poolings(hidden_alt, inputs_alt["attention_mask"], var_indices)
+                cls_alt, center_alt, mean_alt = self._extract_poolings(hidden_alt, attention_mask_alt, var_indices)
                 del outputs_alt, hidden_alt
                 
                 # Chuyển đổi về CPU float16 NumPy để lưu trữ
@@ -229,7 +297,7 @@ class FeatureExtractor:
 
         print(f"[*] Đang trích xuất: {parquet_path}")
         for batch in tqdm(dataloader, desc="Inference"):
-            res = self._process_batch_with_oom_protection(batch, seq_type)
+            res = self._process_batch_with_oom_protection(batch, seq_type, profiler=profiler)
             for k in all_results.keys():
                 if k == "names":
                     all_results[k].extend(res[k])
@@ -242,7 +310,7 @@ class FeatureExtractor:
         print("[*] Đang lưu các ma trận đặc trưng...")
         
         # Nối tất cả numpy arrays và đóng gói thành Tensor
-        final_llr = torch.tensor(np.concatenate(all_results["llr"]))
+        final_llr = torch.tensor(np.concatenate(all_results["llr"]), dtype=torch.float32)
         
         poolings = ["cls", "center", "mean"]
         for p in poolings:

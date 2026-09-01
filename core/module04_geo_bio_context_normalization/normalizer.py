@@ -11,7 +11,8 @@ class AdvancedFeatureNormalizer:
     Module 4: Xử lý hậu kỳ (Điền khuyết & Chuẩn hóa) các đặc trưng sinh học từ VEP.
     Phân tách logic nghiêm ngặt giữa dải xác suất [0,1] và dải điểm vô cực.
     """
-    def __init__(self):
+    def __init__(self, epsilon: float = 1e-8):
+        self.epsilon = float(epsilon)
         self.geom_llr_cols = ["LLR"]
         self.geom_lvd_cols = ["LVD_L2", "LVD_Cosine"]
         self.geom_lid_cols = ["LID"]

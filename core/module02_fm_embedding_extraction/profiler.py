@@ -1,6 +1,7 @@
 import time
 import json
 import os
+import copy
 import torch
 try:
     from thop import profile
@@ -18,7 +19,7 @@ class FoundationModelProfiler:
         self.metrics = {}
         
         self._total_forward_time = 0.0
-        self._forward_start = 0.0
+        self._forward_start = None
         self._gflops_measured = False # [BẢN VÁ 2] Cờ chặn đo lặp lại
         
     def measure_static_memory(self, model: torch.nn.Module):
@@ -57,8 +58,11 @@ class FoundationModelProfiler:
         
     def toc(self):
         """Chốt giờ SAU KHI Model Forward xong."""
+        if self._forward_start is None:
+            return
         if self.device.type == 'cuda': torch.cuda.synchronize()
         self._total_forward_time += (time.time() - self._forward_start)
+        self._forward_start = None
         
     def calculate_final_metrics(self, num_samples: int):
         """Tổng hợp Peak VRAM và Average Latency (loại bỏ 100% độ trễ Ổ cứng)."""
@@ -76,7 +80,7 @@ class FoundationModelProfiler:
         # Reset thời gian cho vòng lặp tập dataset kế tiếp
         self._total_forward_time = 0.0 
         
-    def export_to_json(self, filepath: str):
+    def export_to_json(self, filepath: str, dataset_name: str | None = None, source_path: str | None = None):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
@@ -86,7 +90,21 @@ class FoundationModelProfiler:
                     all_metrics = {}
         else:
             all_metrics = {}
-            
-        all_metrics[self.model_name] = self.metrics
+
+        # Chuan moi: luu theo model -> dataset de tranh ghi de ket qua giua cac test split.
+        # Tuong thich nguoc: neu format cu la model -> metrics, tu dong nang cap.
+        model_entry = all_metrics.get(self.model_name, {})
+        if isinstance(model_entry, dict) and "num_parameters" in model_entry:
+            model_entry = {"__legacy__": model_entry}
+
+        if dataset_name is None:
+            dataset_name = "__aggregate__"
+
+        record = copy.deepcopy(self.metrics)
+        if source_path is not None:
+            record["source_path"] = source_path
+        model_entry[dataset_name] = record
+        all_metrics[self.model_name] = model_entry
+
         with open(filepath, 'w') as f:
             json.dump(all_metrics, f, indent=4)

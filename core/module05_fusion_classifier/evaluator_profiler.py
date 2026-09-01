@@ -130,7 +130,13 @@ class FusionEvaluatorProfiler:
     # =========================================================================
     # 3. TỔNG HỢP END-TO-END THÔNG MINH (Ablation-Aware Aggregation)
     # =========================================================================
-    def get_e2e_profiling(self, dna_model_name: str, prot_model_name: str, active_modalities: list = None) -> dict:
+    def get_e2e_profiling(
+        self,
+        dna_model_name: str,
+        prot_model_name: str,
+        active_modalities: list = None,
+        split_name: str | None = None
+    ) -> dict:
         if active_modalities is None:
             active_modalities = ['dna', 'prot', 'bio', 'geom']
         active_mods = [m.lower() for m in active_modalities]
@@ -145,10 +151,39 @@ class FusionEvaluatorProfiler:
         else:
             print(f"[CẢNH BÁO] Không tìm thấy {self.fm_profile_json}. Báo cáo E2E sẽ thiếu số liệu FM.")
             
-        def safe_get(d, key): return d.get(key, 0.0)
+        def safe_get(d, key):
+            return d.get(key, 0.0) if isinstance(d, dict) else 0.0
 
-        dna_stats = fm_data.get(dna_model_name, {}) if 'dna' in active_mods else {}
-        prot_stats = fm_data.get(prot_model_name, {}) if 'prot' in active_mods else {}
+        metric_keys = {
+            "gflops_per_sample", "inference_time_ms", "num_parameters", "param_memory_mb", "peak_memory_mb"
+        }
+
+        def resolve_stats(model_name: str):
+            if not model_name or model_name == "None":
+                return {}
+            entry = fm_data.get(model_name, {})
+            if not isinstance(entry, dict):
+                return {}
+
+            # Tuong thich nguoc: schema cu model -> metrics.
+            if any(k in entry for k in metric_keys):
+                return entry
+
+            # Schema moi: model -> split -> metrics.
+            if split_name and isinstance(entry.get(split_name), dict):
+                return entry[split_name]
+            if isinstance(entry.get("__aggregate__"), dict):
+                return entry["__aggregate__"]
+            if isinstance(entry.get("__legacy__"), dict):
+                return entry["__legacy__"]
+
+            for _, value in entry.items():
+                if isinstance(value, dict):
+                    return value
+            return {}
+
+        dna_stats = resolve_stats(dna_model_name) if 'dna' in active_mods else {}
+        prot_stats = resolve_stats(prot_model_name) if 'prot' in active_mods else {}
         
         e2e_gflops = safe_get(dna_stats, "gflops_per_sample") + safe_get(prot_stats, "gflops_per_sample") + self.fusion_metrics["gflops_per_sample"]
         e2e_latency = safe_get(dna_stats, "inference_time_ms") + safe_get(prot_stats, "inference_time_ms") + self.fusion_metrics["inference_time_ms"]
