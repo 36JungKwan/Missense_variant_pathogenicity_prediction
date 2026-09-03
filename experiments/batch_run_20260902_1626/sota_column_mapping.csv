@@ -1,0 +1,113 @@
+Dataset,Model,file_path,score_col,rankscore_col,pred_col,resolved_prob_col,resolved_prob_kind,resolved_threshold,pred_source,label_col
+test,SIFT,D:/variant_data/test_full_seq_after_vep_final.parquet,['SIFT_score'],"['SIFT_converted_rankscore', 'SIFT_rankscore']",['SIFT_pred'],SIFT_converted_rankscore,rankscore,0.39575,SIFT_pred,Label
+test,SIFT4G,D:/variant_data/test_full_seq_after_vep_final.parquet,['SIFT4G_score'],"['SIFT4G_converted_rankscore', 'SIFT4G_rankscore']",['SIFT4G_pred'],SIFT4G_converted_rankscore,rankscore,0.39575,SIFT4G_pred,Label
+test,Polyphen2_HDIV,D:/variant_data/test_full_seq_after_vep_final.parquet,['Polyphen2_HDIV_score'],['Polyphen2_HDIV_rankscore'],['Polyphen2_HDIV_pred'],Polyphen2_HDIV_rankscore,rankscore,0.38028,Polyphen2_HDIV_pred,Label
+test,Polyphen2_HVAR,D:/variant_data/test_full_seq_after_vep_final.parquet,['Polyphen2_HVAR_score'],['Polyphen2_HVAR_rankscore'],['Polyphen2_HVAR_pred'],Polyphen2_HVAR_rankscore,rankscore,0.48762,Polyphen2_HVAR_pred,Label
+test,MutationTaster,D:/variant_data/test_full_seq_after_vep_final.parquet,['MutationTaster_score'],['MutationTaster_rankscore'],['MutationTaster_pred'],MutationTaster_rankscore,rankscore,0.31733,MutationTaster_pred,Label
+test,MetaSVM,D:/variant_data/test_full_seq_after_vep_final.parquet,['MetaSVM_score'],['MetaSVM_rankscore'],['MetaSVM_pred'],MetaSVM_rankscore,rankscore,0.82257,MetaSVM_pred,Label
+test,MetaLR,D:/variant_data/test_full_seq_after_vep_final.parquet,['MetaLR_score'],['MetaLR_rankscore'],['MetaLR_pred'],MetaLR_rankscore,rankscore,0.81101,MetaLR_pred,Label
+test,MetaRNN,D:/variant_data/test_full_seq_after_vep_final.parquet,['MetaRNN_score'],['MetaRNN_rankscore'],['MetaRNN_pred'],MetaRNN_rankscore,rankscore,0.6149,MetaRNN_pred,Label
+test,M-CAP,D:/variant_data/test_full_seq_after_vep_final.parquet,['M-CAP_score'],['M-CAP_rankscore'],['M-CAP_pred'],M-CAP_rankscore,rankscore,0.025,M-CAP_pred,Label
+test,REVEL,D:/variant_data/test_full_seq_after_vep_final.parquet,['REVEL_score'],['REVEL_rankscore'],['REVEL_pred'],REVEL_rankscore,rankscore,0.5,REVEL_pred,Label
+test,MutPred2,D:/variant_data/test_full_seq_after_vep_final.parquet,['MutPred2_score'],['MutPred2_rankscore'],['MutPred2_pred'],MutPred2_rankscore,rankscore,0.5,MutPred2_pred,Label
+test,MVP,D:/variant_data/test_full_seq_after_vep_final.parquet,['MVP_score'],['MVP_rankscore'],['MVP_pred'],MVP_rankscore,rankscore,0.5,MVP_pred,Label
+test,gMVP,D:/variant_data/test_full_seq_after_vep_final.parquet,['gMVP_score'],['gMVP_rankscore'],['gMVP_pred'],gMVP_rankscore,rankscore,0.5,gMVP_pred,Label
+test,MisFit_D,D:/variant_data/test_full_seq_after_vep_final.parquet,['MisFit_D_score'],['MisFit_D_rankscore'],"['MisFit_D_pred_lenient', 'MisFit_D_pred']",MisFit_D_rankscore,rankscore,0.45,MisFit_D_pred_lenient,Label
+test,MPC,D:/variant_data/test_full_seq_after_vep_final.parquet,['MPC_score'],['MPC_rankscore'],['MPC_pred'],MPC_rankscore,rankscore,0.5,MPC_pred,Label
+test,PrimateAI,D:/variant_data/test_full_seq_after_vep_final.parquet,['PrimateAI_score'],['PrimateAI_rankscore'],['PrimateAI_pred'],PrimateAI_rankscore,rankscore,0.803,PrimateAI_pred,Label
+test,BayesDel_addAF,D:/variant_data/test_full_seq_after_vep_final.parquet,['BayesDel_addAF_score'],['BayesDel_addAF_rankscore'],['BayesDel_addAF_pred'],BayesDel_addAF_rankscore,rankscore,0.0692655,BayesDel_addAF_pred,Label
+test,BayesDel_noAF,D:/variant_data/test_full_seq_after_vep_final.parquet,['BayesDel_noAF_score'],['BayesDel_noAF_rankscore'],['BayesDel_noAF_pred'],BayesDel_noAF_rankscore,rankscore,-0.0570105,BayesDel_noAF_pred,Label
+test,ClinPred,D:/variant_data/test_full_seq_after_vep_final.parquet,['ClinPred_score'],['ClinPred_rankscore'],['ClinPred_pred'],ClinPred_rankscore,rankscore,0.5,ClinPred_pred,Label
+test,LIST-S2,D:/variant_data/test_full_seq_after_vep_final.parquet,['LIST-S2_score'],['LIST-S2_rankscore'],['LIST-S2_pred'],LIST-S2_rankscore,rankscore,0.85,LIST-S2_pred,Label
+test,VARITY_R,D:/variant_data/test_full_seq_after_vep_final.parquet,['VARITY_R_score'],['VARITY_R_rankscore'],['VARITY_R_pred'],VARITY_R_rankscore,rankscore,0.5,VARITY_R_pred,Label
+test,VARITY_ER,D:/variant_data/test_full_seq_after_vep_final.parquet,['VARITY_ER_score'],['VARITY_ER_rankscore'],['VARITY_ER_pred'],VARITY_ER_rankscore,rankscore,0.5,VARITY_ER_pred,Label
+test,AlphaMissense,D:/variant_data/test_full_seq_after_vep_final.parquet,['AlphaMissense_score'],['AlphaMissense_rankscore'],['AlphaMissense_pred'],AlphaMissense_rankscore,rankscore,0.5,AlphaMissense_pred,Label
+test,PHACTboost,D:/variant_data/test_full_seq_after_vep_final.parquet,['PHACTboost_score'],['PHACTboost_rankscore'],['PHACTboost_pred'],PHACTboost_rankscore,rankscore,0.62,PHACTboost_pred,Label
+test,MutFormer,D:/variant_data/test_full_seq_after_vep_final.parquet,['MutFormer_score'],['MutFormer_rankscore'],['MutFormer_pred'],MutFormer_rankscore,rankscore,0.8838,MutFormer_pred,Label
+test,popEVE,D:/variant_data/test_full_seq_after_vep_final.parquet,['popEVE_score'],"['popEVE_converted_rankscore', 'popEVE_rankscore']",['popEVE_pred'],popEVE_converted_rankscore,rankscore,0.5,popEVE_pred,Label
+test,CADD,D:/variant_data/test_full_seq_after_vep_final.parquet,"['CADD_raw', 'CADD_phred']",['CADD_raw_rankscore'],['CADD_pred'],CADD_raw_rankscore,rankscore,0.5,CADD_pred,Label
+test,DANN,D:/variant_data/test_full_seq_after_vep_final.parquet,['DANN_score'],['DANN_rankscore'],['DANN_pred'],DANN_rankscore,rankscore,0.5,DANN_pred,Label
+clinvarhq,SIFT,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['SIFT_score'],"['SIFT_converted_rankscore', 'SIFT_rankscore']",['SIFT_pred'],SIFT_converted_rankscore,rankscore,0.39575,SIFT_pred,Label
+clinvarhq,SIFT4G,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['SIFT4G_score'],"['SIFT4G_converted_rankscore', 'SIFT4G_rankscore']",['SIFT4G_pred'],SIFT4G_converted_rankscore,rankscore,0.39575,SIFT4G_pred,Label
+clinvarhq,Polyphen2_HDIV,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['Polyphen2_HDIV_score'],['Polyphen2_HDIV_rankscore'],['Polyphen2_HDIV_pred'],Polyphen2_HDIV_rankscore,rankscore,0.38028,Polyphen2_HDIV_pred,Label
+clinvarhq,Polyphen2_HVAR,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['Polyphen2_HVAR_score'],['Polyphen2_HVAR_rankscore'],['Polyphen2_HVAR_pred'],Polyphen2_HVAR_rankscore,rankscore,0.48762,Polyphen2_HVAR_pred,Label
+clinvarhq,MutationTaster,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MutationTaster_score'],['MutationTaster_rankscore'],['MutationTaster_pred'],MutationTaster_rankscore,rankscore,0.31733,MutationTaster_pred,Label
+clinvarhq,MetaSVM,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MetaSVM_score'],['MetaSVM_rankscore'],['MetaSVM_pred'],MetaSVM_rankscore,rankscore,0.82257,MetaSVM_pred,Label
+clinvarhq,MetaLR,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MetaLR_score'],['MetaLR_rankscore'],['MetaLR_pred'],MetaLR_rankscore,rankscore,0.81101,MetaLR_pred,Label
+clinvarhq,MetaRNN,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MetaRNN_score'],['MetaRNN_rankscore'],['MetaRNN_pred'],MetaRNN_rankscore,rankscore,0.6149,MetaRNN_pred,Label
+clinvarhq,M-CAP,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['M-CAP_score'],['M-CAP_rankscore'],['M-CAP_pred'],M-CAP_rankscore,rankscore,0.025,M-CAP_pred,Label
+clinvarhq,REVEL,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['REVEL_score'],['REVEL_rankscore'],['REVEL_pred'],REVEL_rankscore,rankscore,0.5,REVEL_pred,Label
+clinvarhq,MutPred2,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MutPred2_score'],['MutPred2_rankscore'],['MutPred2_pred'],MutPred2_rankscore,rankscore,0.5,MutPred2_pred,Label
+clinvarhq,MVP,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MVP_score'],['MVP_rankscore'],['MVP_pred'],MVP_rankscore,rankscore,0.5,MVP_pred,Label
+clinvarhq,gMVP,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['gMVP_score'],['gMVP_rankscore'],['gMVP_pred'],gMVP_rankscore,rankscore,0.5,gMVP_pred,Label
+clinvarhq,MisFit_D,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MisFit_D_score'],['MisFit_D_rankscore'],"['MisFit_D_pred_lenient', 'MisFit_D_pred']",MisFit_D_rankscore,rankscore,0.45,MisFit_D_pred_lenient,Label
+clinvarhq,MPC,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MPC_score'],['MPC_rankscore'],['MPC_pred'],MPC_rankscore,rankscore,0.5,MPC_pred,Label
+clinvarhq,PrimateAI,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['PrimateAI_score'],['PrimateAI_rankscore'],['PrimateAI_pred'],PrimateAI_rankscore,rankscore,0.803,PrimateAI_pred,Label
+clinvarhq,BayesDel_addAF,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['BayesDel_addAF_score'],['BayesDel_addAF_rankscore'],['BayesDel_addAF_pred'],BayesDel_addAF_rankscore,rankscore,0.0692655,BayesDel_addAF_pred,Label
+clinvarhq,BayesDel_noAF,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['BayesDel_noAF_score'],['BayesDel_noAF_rankscore'],['BayesDel_noAF_pred'],BayesDel_noAF_rankscore,rankscore,-0.0570105,BayesDel_noAF_pred,Label
+clinvarhq,ClinPred,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['ClinPred_score'],['ClinPred_rankscore'],['ClinPred_pred'],ClinPred_rankscore,rankscore,0.5,ClinPred_pred,Label
+clinvarhq,LIST-S2,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['LIST-S2_score'],['LIST-S2_rankscore'],['LIST-S2_pred'],LIST-S2_rankscore,rankscore,0.85,LIST-S2_pred,Label
+clinvarhq,VARITY_R,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['VARITY_R_score'],['VARITY_R_rankscore'],['VARITY_R_pred'],VARITY_R_rankscore,rankscore,0.5,VARITY_R_pred,Label
+clinvarhq,VARITY_ER,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['VARITY_ER_score'],['VARITY_ER_rankscore'],['VARITY_ER_pred'],VARITY_ER_rankscore,rankscore,0.5,VARITY_ER_pred,Label
+clinvarhq,AlphaMissense,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['AlphaMissense_score'],['AlphaMissense_rankscore'],['AlphaMissense_pred'],AlphaMissense_rankscore,rankscore,0.5,AlphaMissense_pred,Label
+clinvarhq,PHACTboost,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['PHACTboost_score'],['PHACTboost_rankscore'],['PHACTboost_pred'],PHACTboost_rankscore,rankscore,0.62,PHACTboost_pred,Label
+clinvarhq,MutFormer,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['MutFormer_score'],['MutFormer_rankscore'],['MutFormer_pred'],MutFormer_rankscore,rankscore,0.8838,MutFormer_pred,Label
+clinvarhq,popEVE,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['popEVE_score'],"['popEVE_converted_rankscore', 'popEVE_rankscore']",['popEVE_pred'],popEVE_converted_rankscore,rankscore,0.5,popEVE_pred,Label
+clinvarhq,CADD,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,"['CADD_raw', 'CADD_phred']",['CADD_raw_rankscore'],['CADD_pred'],CADD_raw_rankscore,rankscore,0.5,CADD_pred,Label
+clinvarhq,DANN,D:/variant_data/clinvarhq_full_seq_after_vep_final.parquet,['DANN_score'],['DANN_rankscore'],['DANN_pred'],DANN_rankscore,rankscore,0.5,DANN_pred,Label
+uniprot,SIFT,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['SIFT_score'],"['SIFT_converted_rankscore', 'SIFT_rankscore']",['SIFT_pred'],SIFT_converted_rankscore,rankscore,0.39575,SIFT_pred,Label
+uniprot,SIFT4G,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['SIFT4G_score'],"['SIFT4G_converted_rankscore', 'SIFT4G_rankscore']",['SIFT4G_pred'],SIFT4G_converted_rankscore,rankscore,0.39575,SIFT4G_pred,Label
+uniprot,Polyphen2_HDIV,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['Polyphen2_HDIV_score'],['Polyphen2_HDIV_rankscore'],['Polyphen2_HDIV_pred'],Polyphen2_HDIV_rankscore,rankscore,0.38028,Polyphen2_HDIV_pred,Label
+uniprot,Polyphen2_HVAR,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['Polyphen2_HVAR_score'],['Polyphen2_HVAR_rankscore'],['Polyphen2_HVAR_pred'],Polyphen2_HVAR_rankscore,rankscore,0.48762,Polyphen2_HVAR_pred,Label
+uniprot,MutationTaster,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MutationTaster_score'],['MutationTaster_rankscore'],['MutationTaster_pred'],MutationTaster_rankscore,rankscore,0.31733,MutationTaster_pred,Label
+uniprot,MetaSVM,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MetaSVM_score'],['MetaSVM_rankscore'],['MetaSVM_pred'],MetaSVM_rankscore,rankscore,0.82257,MetaSVM_pred,Label
+uniprot,MetaLR,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MetaLR_score'],['MetaLR_rankscore'],['MetaLR_pred'],MetaLR_rankscore,rankscore,0.81101,MetaLR_pred,Label
+uniprot,MetaRNN,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MetaRNN_score'],['MetaRNN_rankscore'],['MetaRNN_pred'],MetaRNN_rankscore,rankscore,0.6149,MetaRNN_pred,Label
+uniprot,M-CAP,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['M-CAP_score'],['M-CAP_rankscore'],['M-CAP_pred'],M-CAP_rankscore,rankscore,0.025,M-CAP_pred,Label
+uniprot,REVEL,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['REVEL_score'],['REVEL_rankscore'],['REVEL_pred'],REVEL_rankscore,rankscore,0.5,REVEL_pred,Label
+uniprot,MutPred2,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MutPred2_score'],['MutPred2_rankscore'],['MutPred2_pred'],MutPred2_rankscore,rankscore,0.5,MutPred2_pred,Label
+uniprot,MVP,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MVP_score'],['MVP_rankscore'],['MVP_pred'],MVP_rankscore,rankscore,0.5,MVP_pred,Label
+uniprot,gMVP,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['gMVP_score'],['gMVP_rankscore'],['gMVP_pred'],gMVP_rankscore,rankscore,0.5,gMVP_pred,Label
+uniprot,MisFit_D,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MisFit_D_score'],['MisFit_D_rankscore'],"['MisFit_D_pred_lenient', 'MisFit_D_pred']",MisFit_D_rankscore,rankscore,0.45,MisFit_D_pred_lenient,Label
+uniprot,MPC,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MPC_score'],['MPC_rankscore'],['MPC_pred'],MPC_rankscore,rankscore,0.5,MPC_pred,Label
+uniprot,PrimateAI,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['PrimateAI_score'],['PrimateAI_rankscore'],['PrimateAI_pred'],PrimateAI_rankscore,rankscore,0.803,PrimateAI_pred,Label
+uniprot,BayesDel_addAF,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['BayesDel_addAF_score'],['BayesDel_addAF_rankscore'],['BayesDel_addAF_pred'],BayesDel_addAF_rankscore,rankscore,0.0692655,BayesDel_addAF_pred,Label
+uniprot,BayesDel_noAF,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['BayesDel_noAF_score'],['BayesDel_noAF_rankscore'],['BayesDel_noAF_pred'],BayesDel_noAF_rankscore,rankscore,-0.0570105,BayesDel_noAF_pred,Label
+uniprot,ClinPred,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['ClinPred_score'],['ClinPred_rankscore'],['ClinPred_pred'],ClinPred_rankscore,rankscore,0.5,ClinPred_pred,Label
+uniprot,LIST-S2,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['LIST-S2_score'],['LIST-S2_rankscore'],['LIST-S2_pred'],LIST-S2_rankscore,rankscore,0.85,LIST-S2_pred,Label
+uniprot,VARITY_R,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['VARITY_R_score'],['VARITY_R_rankscore'],['VARITY_R_pred'],VARITY_R_rankscore,rankscore,0.5,VARITY_R_pred,Label
+uniprot,VARITY_ER,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['VARITY_ER_score'],['VARITY_ER_rankscore'],['VARITY_ER_pred'],VARITY_ER_rankscore,rankscore,0.5,VARITY_ER_pred,Label
+uniprot,AlphaMissense,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['AlphaMissense_score'],['AlphaMissense_rankscore'],['AlphaMissense_pred'],AlphaMissense_rankscore,rankscore,0.5,AlphaMissense_pred,Label
+uniprot,PHACTboost,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['PHACTboost_score'],['PHACTboost_rankscore'],['PHACTboost_pred'],PHACTboost_rankscore,rankscore,0.62,PHACTboost_pred,Label
+uniprot,MutFormer,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['MutFormer_score'],['MutFormer_rankscore'],['MutFormer_pred'],MutFormer_rankscore,rankscore,0.8838,MutFormer_pred,Label
+uniprot,popEVE,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['popEVE_score'],"['popEVE_converted_rankscore', 'popEVE_rankscore']",['popEVE_pred'],popEVE_converted_rankscore,rankscore,0.5,popEVE_pred,Label
+uniprot,CADD,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,"['CADD_raw', 'CADD_phred']",['CADD_raw_rankscore'],['CADD_pred'],CADD_raw_rankscore,rankscore,0.5,CADD_pred,Label
+uniprot,DANN,D:/variant_data/uniprot_full_seq_after_vep_final.parquet,['DANN_score'],['DANN_rankscore'],['DANN_pred'],DANN_rankscore,rankscore,0.5,DANN_pred,Label
+proteingym,SIFT,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['SIFT_score'],"['SIFT_converted_rankscore', 'SIFT_rankscore']",['SIFT_pred'],SIFT_converted_rankscore,rankscore,0.39575,SIFT_pred,Label
+proteingym,SIFT4G,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['SIFT4G_score'],"['SIFT4G_converted_rankscore', 'SIFT4G_rankscore']",['SIFT4G_pred'],SIFT4G_converted_rankscore,rankscore,0.39575,SIFT4G_pred,Label
+proteingym,Polyphen2_HDIV,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['Polyphen2_HDIV_score'],['Polyphen2_HDIV_rankscore'],['Polyphen2_HDIV_pred'],Polyphen2_HDIV_rankscore,rankscore,0.38028,Polyphen2_HDIV_pred,Label
+proteingym,Polyphen2_HVAR,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['Polyphen2_HVAR_score'],['Polyphen2_HVAR_rankscore'],['Polyphen2_HVAR_pred'],Polyphen2_HVAR_rankscore,rankscore,0.48762,Polyphen2_HVAR_pred,Label
+proteingym,MutationTaster,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MutationTaster_score'],['MutationTaster_rankscore'],['MutationTaster_pred'],MutationTaster_rankscore,rankscore,0.31733,MutationTaster_pred,Label
+proteingym,MetaSVM,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MetaSVM_score'],['MetaSVM_rankscore'],['MetaSVM_pred'],MetaSVM_rankscore,rankscore,0.82257,MetaSVM_pred,Label
+proteingym,MetaLR,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MetaLR_score'],['MetaLR_rankscore'],['MetaLR_pred'],MetaLR_rankscore,rankscore,0.81101,MetaLR_pred,Label
+proteingym,MetaRNN,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MetaRNN_score'],['MetaRNN_rankscore'],['MetaRNN_pred'],MetaRNN_rankscore,rankscore,0.6149,MetaRNN_pred,Label
+proteingym,M-CAP,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['M-CAP_score'],['M-CAP_rankscore'],['M-CAP_pred'],M-CAP_rankscore,rankscore,0.025,M-CAP_pred,Label
+proteingym,REVEL,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['REVEL_score'],['REVEL_rankscore'],['REVEL_pred'],REVEL_rankscore,rankscore,0.5,REVEL_pred,Label
+proteingym,MutPred2,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MutPred2_score'],['MutPred2_rankscore'],['MutPred2_pred'],MutPred2_rankscore,rankscore,0.5,MutPred2_pred,Label
+proteingym,MVP,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MVP_score'],['MVP_rankscore'],['MVP_pred'],MVP_rankscore,rankscore,0.5,MVP_pred,Label
+proteingym,gMVP,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['gMVP_score'],['gMVP_rankscore'],['gMVP_pred'],gMVP_rankscore,rankscore,0.5,gMVP_pred,Label
+proteingym,MisFit_D,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MisFit_D_score'],['MisFit_D_rankscore'],"['MisFit_D_pred_lenient', 'MisFit_D_pred']",MisFit_D_rankscore,rankscore,0.45,MisFit_D_pred_lenient,Label
+proteingym,MPC,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MPC_score'],['MPC_rankscore'],['MPC_pred'],MPC_rankscore,rankscore,0.5,MPC_pred,Label
+proteingym,PrimateAI,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['PrimateAI_score'],['PrimateAI_rankscore'],['PrimateAI_pred'],PrimateAI_rankscore,rankscore,0.803,PrimateAI_pred,Label
+proteingym,BayesDel_addAF,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['BayesDel_addAF_score'],['BayesDel_addAF_rankscore'],['BayesDel_addAF_pred'],BayesDel_addAF_rankscore,rankscore,0.0692655,BayesDel_addAF_pred,Label
+proteingym,BayesDel_noAF,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['BayesDel_noAF_score'],['BayesDel_noAF_rankscore'],['BayesDel_noAF_pred'],BayesDel_noAF_rankscore,rankscore,-0.0570105,BayesDel_noAF_pred,Label
+proteingym,ClinPred,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['ClinPred_score'],['ClinPred_rankscore'],['ClinPred_pred'],ClinPred_rankscore,rankscore,0.5,ClinPred_pred,Label
+proteingym,LIST-S2,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['LIST-S2_score'],['LIST-S2_rankscore'],['LIST-S2_pred'],LIST-S2_rankscore,rankscore,0.85,LIST-S2_pred,Label
+proteingym,VARITY_R,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['VARITY_R_score'],['VARITY_R_rankscore'],['VARITY_R_pred'],VARITY_R_rankscore,rankscore,0.5,VARITY_R_pred,Label
+proteingym,VARITY_ER,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['VARITY_ER_score'],['VARITY_ER_rankscore'],['VARITY_ER_pred'],VARITY_ER_rankscore,rankscore,0.5,VARITY_ER_pred,Label
+proteingym,AlphaMissense,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['AlphaMissense_score'],['AlphaMissense_rankscore'],['AlphaMissense_pred'],AlphaMissense_rankscore,rankscore,0.5,AlphaMissense_pred,Label
+proteingym,PHACTboost,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['PHACTboost_score'],['PHACTboost_rankscore'],['PHACTboost_pred'],PHACTboost_rankscore,rankscore,0.62,PHACTboost_pred,Label
+proteingym,MutFormer,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['MutFormer_score'],['MutFormer_rankscore'],['MutFormer_pred'],MutFormer_rankscore,rankscore,0.8838,MutFormer_pred,Label
+proteingym,popEVE,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['popEVE_score'],"['popEVE_converted_rankscore', 'popEVE_rankscore']",['popEVE_pred'],popEVE_converted_rankscore,rankscore,0.5,popEVE_pred,Label
+proteingym,CADD,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,"['CADD_raw', 'CADD_phred']",['CADD_raw_rankscore'],['CADD_pred'],CADD_raw_rankscore,rankscore,0.5,CADD_pred,Label
+proteingym,DANN,D:/variant_data/proteingym_full_seq_after_vep_final.parquet,['DANN_score'],['DANN_rankscore'],['DANN_pred'],DANN_rankscore,rankscore,0.5,DANN_pred,Label

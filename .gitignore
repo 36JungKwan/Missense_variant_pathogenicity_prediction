@@ -3,3 +3,7 @@
 *.pyc
 *_pycache_
 *.venv
+*.pth
+*checkpoints
+*tensorboard_logs
+*tests

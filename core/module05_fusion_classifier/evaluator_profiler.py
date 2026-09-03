@@ -9,6 +9,7 @@ from sklearn.metrics import (
     matthews_corrcoef, roc_auc_score, average_precision_score, confusion_matrix
 )
 from torch.utils.tensorboard import SummaryWriter
+profile = None
 try:
     from thop import profile
 except ImportError:
@@ -95,6 +96,10 @@ class FusionEvaluatorProfiler:
         self.fusion_metrics["num_parameters"] = total_params
         self.fusion_metrics["param_memory_mb"] = round(param_mem_mb, 2)
         
+        if profile is None:
+            self.fusion_metrics["gflops_per_sample"] = 0.0
+            return
+
         try:
             macs, _ = profile(model, inputs=dummy_inputs, verbose=False)
             gflops = (macs * 2) / (10 ** 9)

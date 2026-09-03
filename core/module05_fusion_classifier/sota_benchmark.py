@@ -80,13 +80,86 @@ SOTA_REQUIRED_COLUMNS = [
 ]
 
 
+# Chi ap dung khi phai fallback ve score goc (khong co rankscore).
+SOTA_SCORE_DIRECTION = {
+    "SIFT": "lower_is_pathogenic",
+    "SIFT4G": "lower_is_pathogenic",
+}
+
+
+# Nguong phan loai fallback khi khong co cot pred.
+# Uu tien nguong theo rankscore (vi rankscore da chuan hoa huong),
+# fallback ve score neu rankscore khong ton tai.
+SOTA_THRESHOLDS = {
+    "SIFT": {"rankscore": 0.39575, "score": 0.05},
+    "SIFT4G": {"rankscore": 0.39575, "score": 0.05},
+    "Polyphen2_HDIV": {"rankscore": 0.38028, "score": 0.5},
+    "Polyphen2_HVAR": {"rankscore": 0.48762, "score": 0.5},
+    "MutationTaster": {"rankscore": 0.31733, "score": 0.5},
+    "MetaSVM": {"rankscore": 0.82257, "score": 0.0},
+    "MetaLR": {"rankscore": 0.81101, "score": 0.5},
+    "MetaRNN": {"rankscore": 0.6149, "score": 0.5},
+    "M-CAP": {"score": 0.025},
+    "MisFit_D": {"score": 0.45},
+    "PrimateAI": {"score": 0.803},
+    "BayesDel_addAF": {"score": 0.0692655},
+    "BayesDel_noAF": {"score": -0.0570105},
+    "ClinPred": {"score": 0.5},
+    "LIST-S2": {"score": 0.85},
+    "PHACTboost": {"score": 0.62},
+    "MutFormer": {"score": 0.8838},
+}
+
+
+def _resolve_model_threshold(
+    model_name: str | None,
+    prob_kind: str,
+    default_threshold: float,
+    model_thresholds: dict[str, dict[str, float]] | None = None,
+) -> float:
+    if not model_name:
+        return float(default_threshold)
+
+    table = model_thresholds or SOTA_THRESHOLDS
+    spec = table.get(model_name)
+    if not isinstance(spec, dict):
+        return float(default_threshold)
+
+    if prob_kind in spec:
+        return float(spec[prob_kind])
+    if "rankscore" in spec:
+        return float(spec["rankscore"])
+    if "score" in spec:
+        return float(spec["score"])
+    return float(default_threshold)
+
+
 def _to_binary_pred(x: pd.Series) -> np.ndarray:
     if pd.api.types.is_numeric_dtype(x):
         return (x.astype(float).to_numpy() > 0.5).astype(int)
 
     s = x.astype(str).str.strip().str.lower()
-    pos_set = {"1", "true", "pathogenic", "damaging", "deleterious"}
-    return s.isin(pos_set).astype(int).to_numpy()
+    # VEP/SOTA pred columns often use symbolic tags (e.g. d/t, p/b) instead of full words.
+    pos_set = {
+        "1", "true", "pathogenic", "damaging", "deleterious",
+        "d", "p", "a", "disease_causing", "disease-causing",
+    }
+    neg_set = {
+        "0", "false", "benign", "tolerated", "neutral",
+        "t", "b", "n", "polymorphism",
+    }
+
+    is_pos = s.isin(pos_set)
+    is_neg = s.isin(neg_set)
+
+    # Handle verbose labels like probably_damaging, disease_causing_automatic, etc.
+    contains_pos = s.str.contains(r"pathogen|damag|deleter|disease", regex=True)
+    contains_neg = s.str.contains(r"benign|tolerat|neutral|polymorphism", regex=True)
+
+    y_pred = np.where(is_pos | (contains_pos & ~contains_neg), 1, 0)
+    # Keep explicit negative codes as 0 even if text heuristics are ambiguous.
+    y_pred = np.where(is_neg, 0, y_pred)
+    return y_pred.astype(int)
 
 
 def _safe_binary_metrics(y_true: np.ndarray, y_prob: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
@@ -184,22 +257,46 @@ def _first_existing(df: pd.DataFrame, value: Any) -> str | None:
     return None
 
 
-def _choose_prob_pred(df: pd.DataFrame, spec: dict[str, Any], threshold: float) -> tuple[np.ndarray, np.ndarray, str, str]:
-    prob_col = _first_existing(df, spec.get("score")) or _first_existing(df, spec.get("rankscore"))
+def _choose_prob_pred(
+    df: pd.DataFrame,
+    spec: dict[str, Any],
+    threshold: float,
+    model_name: str | None = None,
+    score_direction: dict[str, str] | None = None,
+    model_thresholds: dict[str, dict[str, float]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, str, str, str, float]:
+    rank_col = _first_existing(df, spec.get("rankscore"))
+    score_col = _first_existing(df, spec.get("score"))
+    prob_col = rank_col or score_col
     if prob_col is None:
         raise ValueError("Model khong co cot score/rankscore de tinh AUROC/AUPRC")
 
+    prob_kind = "rankscore" if rank_col is not None else "score"
+
     y_prob = pd.to_numeric(df[prob_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
 
+    # Rankscore thuong da quy ve huong diem lon = kha nang pathogenic cao.
+    # Neu fallback score goc va model co huong nguoc, dao chieu de benchmark cong bang.
+    if prob_kind == "score" and model_name and score_direction:
+        direction = score_direction.get(model_name)
+        if direction == "lower_is_pathogenic":
+            y_prob = 1.0 - np.clip(y_prob, 0.0, 1.0)
+
     pred_col = _first_existing(df, spec.get("pred"))
+    used_threshold = _resolve_model_threshold(
+        model_name=model_name,
+        prob_kind=prob_kind,
+        default_threshold=threshold,
+        model_thresholds=model_thresholds,
+    )
     if pred_col:
         y_pred = _to_binary_pred(df[pred_col])
         pred_source = pred_col
     else:
-        y_pred = (y_prob > threshold).astype(int)
-        pred_source = f"threshold@{threshold}"
+        y_pred = (y_prob > used_threshold).astype(int)
+        pred_source = f"threshold@{used_threshold}"
 
-    return y_prob, y_pred, pred_source, prob_col
+    return y_prob, y_pred, pred_source, prob_col, prob_kind, used_threshold
 
 
 def audit_required_sota_columns(
@@ -255,6 +352,8 @@ def evaluate_sota_from_test_files(
     label_col: str | None = "Pathogenicity_Label",
     label_candidates: list[str] | None = None,
     model_columns: dict[str, dict[str, Any]] | None = None,
+    score_direction: dict[str, str] | None = None,
+    model_thresholds: dict[str, dict[str, float]] | None = None,
     threshold: float = 0.5,
     required_columns: list[str] | None = None,
     enforce_required_columns: bool = False,
@@ -301,7 +400,14 @@ def evaluate_sota_from_test_files(
                     continue
 
             try:
-                y_prob, y_pred, pred_source, prob_col = _choose_prob_pred(df, spec, threshold)
+                y_prob, y_pred, pred_source, prob_col, prob_kind, used_threshold = _choose_prob_pred(
+                    df,
+                    spec,
+                    threshold,
+                    model_name=model_name,
+                    score_direction=score_direction or SOTA_SCORE_DIRECTION,
+                    model_thresholds=model_thresholds or SOTA_THRESHOLDS,
+                )
             except Exception:
                 continue
 
@@ -323,6 +429,8 @@ def evaluate_sota_from_test_files(
                 "rankscore_col": spec.get("rankscore"),
                 "pred_col": spec.get("pred"),
                 "resolved_prob_col": prob_col,
+                "resolved_prob_kind": prob_kind,
+                "resolved_threshold": used_threshold,
                 "pred_source": pred_source,
                 "label_col": resolved_label_col,
             })

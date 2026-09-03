@@ -116,11 +116,19 @@ class VariantFusionDataset(Dataset):
         if self.has_geom:
             geom_values = np.nan_to_num(self.df[self.geom_cols].values, nan=0.0)
             self.geom_tensor = torch.tensor(geom_values, dtype=torch.float32)
-            
-        if self.is_train and "Pathogenicity_Label" in self.df.columns:
-            self.labels = torch.tensor(self.df["Pathogenicity_Label"].values, dtype=torch.float32)
+
+        label_candidates = ["Pathogenicity_Label", "Label", "label", "target", "Target"]
+        label_col = next((c for c in label_candidates if c in self.df.columns), None)
+        if label_col is not None:
+            label_values = pd.to_numeric(self.df[label_col], errors="coerce").fillna(0.0).values
+            self.labels = torch.tensor(label_values, dtype=torch.float32)
         else:
             self.labels = None
+            if self.is_train:
+                raise KeyError(
+                    "Khong tim thay cot nhan. Can mot trong cac cot: "
+                    f"{label_candidates}"
+                )
             
         print(f"[+] Dataset sẵn sàng: {num_samples} mẫu. Đã tối ưu hóa RAM & CPU 100%.\n")
 
