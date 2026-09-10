@@ -111,6 +111,118 @@ SOTA_THRESHOLDS = {
 }
 
 
+SOTA_COMMON_DT_PRED_MAP = {
+    "d": 1.0,
+    "damaging": 1.0,
+    "deleterious": 1.0,
+    "pathogenic": 1.0,
+    "t": 0.0,
+    "tolerated": 0.0,
+    "benign": 0.0,
+    "neutral": 0.0,
+}
+
+
+SOTA_PRED_LABEL_MAPS: dict[str, dict[str, float]] = {
+    # D = damaging/deleterious, T = tolerated.
+    "SIFT": SOTA_COMMON_DT_PRED_MAP,
+    "SIFT4G": SOTA_COMMON_DT_PRED_MAP,
+    "MetaSVM": SOTA_COMMON_DT_PRED_MAP,
+    "MetaLR": SOTA_COMMON_DT_PRED_MAP,
+    "MetaRNN": SOTA_COMMON_DT_PRED_MAP,
+    "M-CAP": SOTA_COMMON_DT_PRED_MAP,
+    "REVEL": SOTA_COMMON_DT_PRED_MAP,
+    "MVP": SOTA_COMMON_DT_PRED_MAP,
+    "gMVP": SOTA_COMMON_DT_PRED_MAP,
+    "MisFit_D": SOTA_COMMON_DT_PRED_MAP,
+    "MPC": SOTA_COMMON_DT_PRED_MAP,
+    "PrimateAI": SOTA_COMMON_DT_PRED_MAP,
+    "BayesDel_addAF": SOTA_COMMON_DT_PRED_MAP,
+    "BayesDel_noAF": SOTA_COMMON_DT_PRED_MAP,
+    "ClinPred": SOTA_COMMON_DT_PRED_MAP,
+    "LIST-S2": SOTA_COMMON_DT_PRED_MAP,
+    "VARITY_R": SOTA_COMMON_DT_PRED_MAP,
+    "VARITY_ER": SOTA_COMMON_DT_PRED_MAP,
+    "PHACTboost": SOTA_COMMON_DT_PRED_MAP,
+    "MutFormer": SOTA_COMMON_DT_PRED_MAP,
+    "CADD": SOTA_COMMON_DT_PRED_MAP,
+    "DANN": SOTA_COMMON_DT_PRED_MAP,
+    # PolyPhen-2: B = benign, P = possibly damaging, D = probably damaging.
+    "Polyphen2_HDIV": {
+        "b": 0.0,
+        "benign": 0.0,
+        "p": 1.0,
+        "possibly_damaging": 1.0,
+        "possibly damaging": 1.0,
+        "d": 1.0,
+        "probably_damaging": 1.0,
+        "probably damaging": 1.0,
+    },
+    "Polyphen2_HVAR": {
+        "b": 0.0,
+        "benign": 0.0,
+        "p": 1.0,
+        "possibly_damaging": 1.0,
+        "possibly damaging": 1.0,
+        "d": 1.0,
+        "probably_damaging": 1.0,
+        "probably damaging": 1.0,
+    },
+    # MutationTaster: A/D = disease causing, N/P = polymorphism.
+    "MutationTaster": {
+        "a": 1.0,
+        "d": 1.0,
+        "disease_causing": 1.0,
+        "disease-causing": 1.0,
+        "disease causing": 1.0,
+        "disease_causing_automatic": 1.0,
+        "disease-causing-automatic": 1.0,
+        "disease causing automatic": 1.0,
+        "n": 0.0,
+        "p": 0.0,
+        "polymorphism": 0.0,
+        "polymorphism_automatic": 0.0,
+        "polymorphism-automatic": 0.0,
+        "polymorphism automatic": 0.0,
+    },
+    # MutPred2: UC is uncertain, so it remains unmapped and falls back to score.
+    "MutPred2": {
+        "ps": 1.0,
+        "pm": 1.0,
+        "pp": 1.0,
+        "bp": 0.0,
+        "bm": 0.0,
+        "bs": 0.0,
+    },
+    # AlphaMissense: A is ambiguous, so it remains unmapped and falls back to score.
+    "AlphaMissense": {
+        "p": 1.0,
+        "pathogenic": 1.0,
+        "lp": 1.0,
+        "likely_pathogenic": 1.0,
+        "likely pathogenic": 1.0,
+        "b": 0.0,
+        "benign": 0.0,
+        "lb": 0.0,
+        "likely_benign": 0.0,
+        "likely benign": 0.0,
+    },
+    # popEVE: B = benign, M/S = pathogenic-like calls.
+    "popEVE": {
+        "b": 0.0,
+        "benign": 0.0,
+        "m": 1.0,
+        "s": 1.0,
+    },
+}
+
+
+SOTA_UNCERTAIN_PRED_LABELS: dict[str, set[str]] = {
+    "AlphaMissense": {"a", "ambiguous"},
+    "MutPred2": {"uc", "uncertain"},
+}
+
+
 def _resolve_model_threshold(
     model_name: str | None,
     prob_kind: str,
@@ -134,32 +246,47 @@ def _resolve_model_threshold(
     return float(default_threshold)
 
 
-def _to_binary_pred(x: pd.Series) -> np.ndarray:
+def _to_binary_pred(x: pd.Series, model_name: str | None = None) -> np.ndarray:
     if pd.api.types.is_numeric_dtype(x):
-        return (x.astype(float).to_numpy() > 0.5).astype(int)
+        return (x.astype(float).to_numpy() > 0.5).astype(float)
 
     s = x.astype(str).str.strip().str.lower()
-    # VEP/SOTA pred columns often use symbolic tags (e.g. d/t, p/b) instead of full words.
-    pos_set = {
-        "1", "true", "pathogenic", "damaging", "deleterious",
-        "d", "p", "a", "disease_causing", "disease-causing",
+    generic_map = {
+        "1": 1.0,
+        "0": 0.0,
+        "true": 1.0,
+        "false": 0.0,
+        "pathogenic": 1.0,
+        "benign": 0.0,
+        "damaging": 1.0,
+        "deleterious": 1.0,
+        "tolerated": 0.0,
+        "neutral": 0.0,
+        "polymorphism": 0.0,
+        "d": 1.0,
+        "t": 0.0,
+        "b": 0.0,
+        "n": 0.0,
+        "disease_causing": 1.0,
+        "disease-causing": 1.0,
+        "disease causing": 1.0,
     }
-    neg_set = {
-        "0", "false", "benign", "tolerated", "neutral",
-        "t", "b", "n", "polymorphism",
-    }
+    explicit_map = generic_map.copy()
+    explicit_map.update(SOTA_PRED_LABEL_MAPS.get(model_name or "", {}))
 
-    is_pos = s.isin(pos_set)
-    is_neg = s.isin(neg_set)
+    mapped = s.map(explicit_map)
+    uncertain_labels = SOTA_UNCERTAIN_PRED_LABELS.get(model_name or "", set())
+    if uncertain_labels:
+        mapped = mapped.mask(s.isin(uncertain_labels), np.nan)
 
     # Handle verbose labels like probably_damaging, disease_causing_automatic, etc.
     contains_pos = s.str.contains(r"pathogen|damag|deleter|disease", regex=True)
     contains_neg = s.str.contains(r"benign|tolerat|neutral|polymorphism", regex=True)
+    mapped = mapped.where(~(contains_pos & ~contains_neg), 1.0)
+    mapped = mapped.where(~contains_neg, 0.0)
 
-    y_pred = np.where(is_pos | (contains_pos & ~contains_neg), 1, 0)
-    # Keep explicit negative codes as 0 even if text heuristics are ambiguous.
-    y_pred = np.where(is_neg, 0, y_pred)
-    return y_pred.astype(int)
+    # Unknown labels stay NaN and will be thresholded downstream using y_prob.
+    return mapped.to_numpy(dtype=float)
 
 
 def _safe_binary_metrics(y_true: np.ndarray, y_prob: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
@@ -290,7 +417,10 @@ def _choose_prob_pred(
         model_thresholds=model_thresholds,
     )
     if pred_col:
-        y_pred = _to_binary_pred(df[pred_col])
+        y_pred_raw = _to_binary_pred(df[pred_col], model_name=model_name)
+        y_pred = (y_prob > used_threshold).astype(int)
+        known_mask = ~np.isnan(y_pred_raw)
+        y_pred[known_mask] = y_pred_raw[known_mask].astype(int)
         pred_source = pred_col
     else:
         y_pred = (y_prob > used_threshold).astype(int)
