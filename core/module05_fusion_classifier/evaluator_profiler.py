@@ -23,9 +23,16 @@ class FusionEvaluatorProfiler:
     - Ép kiểu Integer an toàn cho Sklearn, chống crash do Float/Continuous targets.
     - Đóng băng NaN (NaN Shield) khi mạng bị Exploding Gradients.
     """
-    def __init__(self, tensorboard_dir: str, fm_profile_json: str, device: torch.device):
+    def __init__(
+        self,
+        tensorboard_dir: str,
+        fm_profile_json: str,
+        device: torch.device,
+        geom_profile_json: str | None = None,
+    ):
         self.device = device
         self.fm_profile_json = fm_profile_json
+        self.geom_profile_json = geom_profile_json
         
         os.makedirs(tensorboard_dir, exist_ok=True)
         self.writer = SummaryWriter(log_dir=tensorboard_dir)
@@ -35,11 +42,13 @@ class FusionEvaluatorProfiler:
             "param_memory_mb": 0.0,
             "num_parameters": 0,
             "inference_time_ms": 0.0,
-            "peak_memory_mb": 0.0
+            "peak_memory_mb": 0.0,
+            "xgb_model_memory_mb": 0.0,
         }
         
         self._inference_start = 0.0
         self._total_inference_time = 0.0
+        self._warned_profile_paths = set()
 
     # =========================================================================
     # 1. TÍNH TOÁN 8 CHỈ SỐ PHÂN LOẠI (AN TOÀN TUYỆT ĐỐI)
@@ -108,6 +117,29 @@ class FusionEvaluatorProfiler:
             print(f"[CẢNH BÁO] thop không thể đo GFLOPs cho Fusion Model: {e}")
             self.fusion_metrics["gflops_per_sample"] = 0.0
 
+    def profile_non_pytorch_fusion(self):
+        """Use for classifiers whose params/GFLOPs are not PyTorch-module based."""
+        self.fusion_metrics["num_parameters"] = 0
+        self.fusion_metrics["param_memory_mb"] = 0.0
+        self.fusion_metrics["gflops_per_sample"] = 0.0
+        self.fusion_metrics["xgb_model_memory_mb"] = 0.0
+
+    def add_xgboost_model_size(self, xgb_model):
+        """Track serialized XGBoost size as model memory, without pretending it is params."""
+        if xgb_model is None:
+            return
+        try:
+            booster = xgb_model.get_booster()
+            raw = booster.save_raw()
+            model_mem_mb = len(raw) / (1024 ** 2)
+            self.fusion_metrics["xgb_model_memory_mb"] = round(model_mem_mb, 2)
+            self.fusion_metrics["param_memory_mb"] = round(
+                self.fusion_metrics["param_memory_mb"] + model_mem_mb,
+                2,
+            )
+        except Exception as e:
+            print(f"[CẢNH BÁO] Không đo được kích thước XGBoost model: {e}")
+
     def reset_memory_stats(self):
         if self.device.type == 'cuda':
             torch.cuda.empty_cache()
@@ -127,10 +159,71 @@ class FusionEvaluatorProfiler:
         else:
             peak_vram = 0.0
             
-        latency_ms = (self._total_inference_time / num_samples) * 1000
+        latency_ms = (self._total_inference_time / max(num_samples, 1)) * 1000
         self.fusion_metrics["inference_time_ms"] = round(latency_ms, 4)
         self.fusion_metrics["peak_memory_mb"] = round(peak_vram, 2)
         self._total_inference_time = 0.0 
+
+    def _load_profile_json(self, filepath: str | None, label: str, required: bool = False) -> dict:
+        if not filepath:
+            return {}
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r') as f:
+                    return json.load(f)
+            except json.JSONDecodeError:
+                key = (label, filepath, "json")
+                if key not in self._warned_profile_paths:
+                    print(f"[CẢNH BÁO] File {filepath} bị lỗi định dạng. Bỏ qua thông số {label}.")
+                    self._warned_profile_paths.add(key)
+                return {}
+
+        if required:
+            key = (label, filepath, "missing")
+            if key not in self._warned_profile_paths:
+                print(f"[CẢNH BÁO] Không tìm thấy {filepath}. Báo cáo E2E sẽ thiếu số liệu {label}.")
+                self._warned_profile_paths.add(key)
+        return {}
+
+    def _resolve_nested_stats(self, profile_data: dict, entry_name: str, split_name: str | None = None) -> dict:
+        if not entry_name or entry_name == "None":
+            return {}
+        entry = profile_data.get(entry_name, {})
+        if not isinstance(entry, dict):
+            return {}
+
+        metric_keys = {
+            "gflops_per_sample", "inference_time_ms", "num_parameters", "param_memory_mb",
+            "peak_memory_mb", "geometry_total_ms_per_sample"
+        }
+
+        # Tuong thich nguoc: schema cu entry -> metrics.
+        if any(k in entry for k in metric_keys):
+            return entry
+
+        # Schema moi: entry -> split -> metrics.
+        if split_name and isinstance(entry.get(split_name), dict):
+            return entry[split_name]
+        if isinstance(entry.get("__aggregate__"), dict):
+            return entry["__aggregate__"]
+        if isinstance(entry.get("__legacy__"), dict):
+            return entry["__legacy__"]
+
+        for _, value in entry.items():
+            if isinstance(value, dict):
+                return value
+        return {}
+
+    def _normalize_geom_stats(self, stats: dict) -> dict:
+        if not isinstance(stats, dict):
+            return {}
+        return {
+            "gflops_per_sample": 0.0,
+            "inference_time_ms": stats.get("geometry_total_ms_per_sample", stats.get("inference_time_ms", 0.0)),
+            "num_parameters": 0,
+            "param_memory_mb": 0.0,
+            "peak_memory_mb": stats.get("peak_memory_mb", 0.0),
+        }
 
     # =========================================================================
     # 3. TỔNG HỢP END-TO-END THÔNG MINH (Ablation-Aware Aggregation)
@@ -140,68 +233,81 @@ class FusionEvaluatorProfiler:
         dna_model_name: str,
         prot_model_name: str,
         active_modalities: list = None,
-        split_name: str | None = None
+        split_name: str | None = None,
+        pooling: str | None = None,
     ) -> dict:
         if active_modalities is None:
             active_modalities = ['dna', 'prot', 'bio', 'geom']
         active_mods = [m.lower() for m in active_modalities]
 
-        fm_data = {}
-        if os.path.exists(self.fm_profile_json):
-            try:
-                with open(self.fm_profile_json, 'r') as f:
-                    fm_data = json.load(f)
-            except json.JSONDecodeError:
-                print(f"[CẢNH BÁO] File {self.fm_profile_json} bị lỗi định dạng. Bỏ qua thông số FM.")
-        else:
-            print(f"[CẢNH BÁO] Không tìm thấy {self.fm_profile_json}. Báo cáo E2E sẽ thiếu số liệu FM.")
+        fm_data = self._load_profile_json(
+            self.fm_profile_json,
+            "FM",
+            required=("dna" in active_mods or "prot" in active_mods),
+        )
+        geom_data = self._load_profile_json(
+            self.geom_profile_json,
+            "geometry",
+            required=("geom" in active_mods),
+        )
             
         def safe_get(d, key):
             return d.get(key, 0.0) if isinstance(d, dict) else 0.0
 
-        metric_keys = {
-            "gflops_per_sample", "inference_time_ms", "num_parameters", "param_memory_mb", "peak_memory_mb"
-        }
-
-        def resolve_stats(model_name: str):
-            if not model_name or model_name == "None":
-                return {}
-            entry = fm_data.get(model_name, {})
-            if not isinstance(entry, dict):
-                return {}
-
-            # Tuong thich nguoc: schema cu model -> metrics.
-            if any(k in entry for k in metric_keys):
-                return entry
-
-            # Schema moi: model -> split -> metrics.
-            if split_name and isinstance(entry.get(split_name), dict):
-                return entry[split_name]
-            if isinstance(entry.get("__aggregate__"), dict):
-                return entry["__aggregate__"]
-            if isinstance(entry.get("__legacy__"), dict):
-                return entry["__legacy__"]
-
-            for _, value in entry.items():
-                if isinstance(value, dict):
-                    return value
-            return {}
-
-        dna_stats = resolve_stats(dna_model_name) if 'dna' in active_mods else {}
-        prot_stats = resolve_stats(prot_model_name) if 'prot' in active_mods else {}
+        dna_stats = self._resolve_nested_stats(fm_data, dna_model_name, split_name) if 'dna' in active_mods else {}
+        prot_stats = self._resolve_nested_stats(fm_data, prot_model_name, split_name) if 'prot' in active_mods else {}
         
-        e2e_gflops = safe_get(dna_stats, "gflops_per_sample") + safe_get(prot_stats, "gflops_per_sample") + self.fusion_metrics["gflops_per_sample"]
-        e2e_latency = safe_get(dna_stats, "inference_time_ms") + safe_get(prot_stats, "inference_time_ms") + self.fusion_metrics["inference_time_ms"]
-        e2e_params = safe_get(dna_stats, "num_parameters") + safe_get(prot_stats, "num_parameters") + self.fusion_metrics["num_parameters"]
-        e2e_param_mem = safe_get(dna_stats, "param_memory_mb") + safe_get(prot_stats, "param_memory_mb") + self.fusion_metrics["param_memory_mb"]
+        dna_geom_stats = {}
+        prot_geom_stats = {}
+        if 'geom' in active_mods:
+            dna_geom_name = f"{dna_model_name}_{pooling}" if pooling and dna_model_name != "None" else dna_model_name
+            prot_geom_name = f"{prot_model_name}_{pooling}" if pooling and prot_model_name != "None" else prot_model_name
+            dna_geom_stats = self._normalize_geom_stats(
+                self._resolve_nested_stats(geom_data, dna_geom_name, split_name)
+            )
+            prot_geom_stats = self._normalize_geom_stats(
+                self._resolve_nested_stats(geom_data, prot_geom_name, split_name)
+            )
+
+        fm_gflops = safe_get(dna_stats, "gflops_per_sample") + safe_get(prot_stats, "gflops_per_sample")
+        fm_latency = safe_get(dna_stats, "inference_time_ms") + safe_get(prot_stats, "inference_time_ms")
+        fm_params = safe_get(dna_stats, "num_parameters") + safe_get(prot_stats, "num_parameters")
+        fm_param_mem = safe_get(dna_stats, "param_memory_mb") + safe_get(prot_stats, "param_memory_mb")
+
+        geom_gflops = safe_get(dna_geom_stats, "gflops_per_sample") + safe_get(prot_geom_stats, "gflops_per_sample")
+        geom_latency = safe_get(dna_geom_stats, "inference_time_ms") + safe_get(prot_geom_stats, "inference_time_ms")
+        geom_params = safe_get(dna_geom_stats, "num_parameters") + safe_get(prot_geom_stats, "num_parameters")
+        geom_param_mem = safe_get(dna_geom_stats, "param_memory_mb") + safe_get(prot_geom_stats, "param_memory_mb")
+
+        classifier_gflops = self.fusion_metrics["gflops_per_sample"]
+        classifier_latency = self.fusion_metrics["inference_time_ms"]
+        classifier_params = self.fusion_metrics["num_parameters"]
+        classifier_param_mem = self.fusion_metrics["param_memory_mb"]
+
+        e2e_gflops = fm_gflops + geom_gflops + classifier_gflops
+        e2e_latency = fm_latency + geom_latency + classifier_latency
+        e2e_params = fm_params + geom_params + classifier_params
+        e2e_param_mem = fm_param_mem + geom_param_mem + classifier_param_mem
         
         e2e_peak_mem = max([
             safe_get(dna_stats, "peak_memory_mb"), 
             safe_get(prot_stats, "peak_memory_mb"), 
+            safe_get(dna_geom_stats, "peak_memory_mb"),
+            safe_get(prot_geom_stats, "peak_memory_mb"),
             self.fusion_metrics["peak_memory_mb"]
         ])
         
         return {
+            "FM_GFLOPs/Sample": round(fm_gflops, 4),
+            "FM_Latency_ms/Sample": round(fm_latency, 2),
+            "Geom_GFLOPs/Sample": round(geom_gflops, 4),
+            "Geom_Latency_ms/Sample": round(geom_latency, 2),
+            "Classifier_GFLOPs/Sample": round(classifier_gflops, 4),
+            "Classifier_Latency_ms/Sample": round(classifier_latency, 2),
+            "Classifier_Total_Params": int(classifier_params),
+            "Classifier_Param_Mem_MB": round(classifier_param_mem, 2),
+            "Classifier_XGB_Model_Mem_MB": round(self.fusion_metrics["xgb_model_memory_mb"], 2),
+            "Classifier_Peak_VRAM_MB": round(self.fusion_metrics["peak_memory_mb"], 2),
             "E2E_GFLOPs/Sample": round(e2e_gflops, 4),
             "E2E_Latency_ms/Sample": round(e2e_latency, 2),
             "E2E_Total_Params": int(e2e_params),

@@ -137,6 +137,7 @@ class FusionBatchPipeline:
         experiments: list | None = None,
         explainability: dict | None = None,
         fm_profile_json: str = "D:/variant_data/profiling/fm_profiling.json",
+        geom_profile_json: str | None = None,
         batch_run_dir: str | None = None,
     ):
         self.base_dir = base_dir
@@ -160,6 +161,7 @@ class FusionBatchPipeline:
             "random_state": 42,
         }
         self.fm_profile_json = fm_profile_json
+        self.geom_profile_json = geom_profile_json or f"{self.base_dir}/profiling/geom_profiling.json"
 
         self.bio_dir = f"{self.base_dir}/processed_parquet"
         self.geom_dir = f"{self.base_dir}/geometry"
@@ -526,7 +528,12 @@ class FusionBatchPipeline:
             shared_hybrid_feat_path = f"{train_cache_ckpt_dir}/hybrid_feature_extractor.pth"
             shared_xgb_json_path = f"{train_cache_ckpt_dir}/best_model_xgboost.json"
 
-            profiler = FusionEvaluatorProfiler(f"{exp_dir}/tensorboard_logs", self.fm_profile_json, self.device)
+            profiler = FusionEvaluatorProfiler(
+                f"{exp_dir}/tensorboard_logs",
+                self.fm_profile_json,
+                self.device,
+                geom_profile_json=self.geom_profile_json,
+            )
             model = MultiStrategyFusionModel(
                 dna_in_dim=dna_dim,
                 prot_in_dim=prot_dim,
@@ -680,6 +687,7 @@ class FusionBatchPipeline:
                     prot_name,
                     active_mods,
                     split_name=dataset_cfg["test"],
+                    pooling=pooling,
                 )
 
             elif exp["type"] == "hybrid":
@@ -715,10 +723,10 @@ class FusionBatchPipeline:
                     xgb_manager.save_model(train_cache_ckpt_dir, prefix="best_model")
                     torch.save(model.state_dict(), shared_hybrid_feat_path)
 
-                f_glob_ts, _, _, _, y_ts, vids_t = _extract_features_for_ml(model, test_loader, self.device, True)
-
+                profiler.add_xgboost_model_size(xgb_manager.model)
                 profiler.reset_memory_stats()
                 profiler.tic_inference()
+                f_glob_ts, _, _, _, y_ts, vids_t = _extract_features_for_ml(model, test_loader, self.device, True)
                 y_probs_t, y_preds_t, _ = xgb_manager.predict_hybrid(f_glob_ts)
                 profiler.toc_inference()
                 profiler.finalize_fusion_inference_profiling(len(test_loader.dataset))
@@ -740,6 +748,7 @@ class FusionBatchPipeline:
                     prot_name,
                     active_mods,
                     split_name=dataset_cfg["test"],
+                    pooling=pooling,
                 )
 
                 self._run_xgb_explainability(
@@ -754,7 +763,7 @@ class FusionBatchPipeline:
                 del xgb_manager, f_glob_ts
 
             elif exp["type"] == "xgboost_pure":
-                profiler.profile_pytorch_fusion(model, d_in_safe)
+                profiler.profile_non_pytorch_fusion()
                 xgb_manager = XGBoostFusionManager()
 
                 if os.path.exists(shared_xgb_json_path):
@@ -778,6 +787,7 @@ class FusionBatchPipeline:
 
                 _, dna_ts, prot_ts, bg_ts, y_ts, vids_t = _extract_features_for_ml(model, test_loader, self.device, False)
 
+                profiler.add_xgboost_model_size(xgb_manager.model)
                 profiler.reset_memory_stats()
                 profiler.tic_inference()
                 y_probs_t, y_preds_t, _ = xgb_manager.predict_pure(dna_ts, prot_ts, bg_ts)
@@ -791,6 +801,7 @@ class FusionBatchPipeline:
                     prot_name,
                     active_mods,
                     split_name=dataset_cfg["test"],
+                    pooling=pooling,
                 )
 
                 xgb_manager.save_model(f"{exp_dir}/checkpoints", prefix="best_model")
@@ -944,8 +955,16 @@ class FusionBatchPipeline:
                     best_dna, best_prot = self.dna_models[0], self.prot_models[0]
 
                 stage2_cfgs = [
+                    (None, None, ["bio"]),
+                    (best_dna, best_prot, ["geom"]),
                     (best_dna, None, ["dna"]),
                     (None, best_prot, ["prot"]),
+                    (best_dna, None, ["dna", "bio"]),
+                    (None, best_prot, ["prot", "bio"]),
+                    (best_dna, best_prot, ["dna", "geom"]),
+                    (best_dna, best_prot, ["prot", "geom"]),
+                    (best_dna, best_prot, ["dna", "bio", "geom"]),
+                    (best_dna, best_prot, ["prot", "bio", "geom"]),
                     (best_dna, best_prot, ["dna", "prot", "geom"]),
                     (best_dna, best_prot, ["dna", "prot", "bio"]),
                     (best_dna, best_prot, ["dna", "prot", "bio", "geom"]),

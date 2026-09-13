@@ -15,6 +15,8 @@ class MultiStrategyFusionModel(nn.Module):
                  active_modalities: list = None,
                  fusion_dim: int = 512,
                  bio_upsample_dim: int = 128,
+                 bio_in_dim: int = 11,
+                 geom_in_dim: int = 8,
                  fusion_strategy: str = 'concat',
                  dropout: float = 0.2):
         super().__init__()
@@ -57,9 +59,14 @@ class MultiStrategyFusionModel(nn.Module):
         # =====================================================================
         # 2. KHỐI BẢO VỆ ĐẶC TRƯNG SINH HỌC & HÌNH HỌC (Khởi tạo động)
         # =====================================================================
+        if self.has_bio and bio_in_dim <= 0:
+            raise ValueError("[LỖI] Cấu hình yêu cầu Bio nhưng bio_in_dim <= 0!")
+        if self.has_geom and geom_in_dim <= 0:
+            raise ValueError("[LỖI] Cấu hình yêu cầu Geom nhưng geom_in_dim <= 0!")
+
         bio_geom_dim = 0
-        if self.has_bio: bio_geom_dim += 11
-        if self.has_geom: bio_geom_dim += 8
+        if self.has_bio: bio_geom_dim += bio_in_dim
+        if self.has_geom: bio_geom_dim += geom_in_dim
         self.has_ml_features = (bio_geom_dim > 0)
         
         actual_bio_upsample_dim = 0
