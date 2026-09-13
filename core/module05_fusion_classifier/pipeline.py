@@ -235,6 +235,47 @@ class FusionBatchPipeline:
     def _feature_names(self, n_features: int, prefix: str):
         return [f"{prefix}_{i:04d}" for i in range(n_features)]
 
+    def _select_positive_shap_values(self, shap_values, n_samples: int, n_features: int) -> np.ndarray:
+        if isinstance(shap_values, list):
+            shap_arr = np.asarray(shap_values[1 if len(shap_values) > 1 else 0])
+        else:
+            shap_arr = np.asarray(shap_values)
+
+        if shap_arr.ndim == 3:
+            if shap_arr.shape[0] == n_samples and shap_arr.shape[1] == n_features:
+                shap_arr = shap_arr[:, :, 1 if shap_arr.shape[2] > 1 else 0]
+            elif shap_arr.shape[1] == n_samples and shap_arr.shape[2] == n_features:
+                shap_arr = shap_arr[1 if shap_arr.shape[0] > 1 else 0, :, :]
+            elif shap_arr.shape[0] == n_samples and shap_arr.shape[2] == n_features:
+                shap_arr = shap_arr[:, 1 if shap_arr.shape[1] > 1 else 0, :]
+
+        if shap_arr.ndim != 2 or shap_arr.shape != (n_samples, n_features):
+            raise ValueError(
+                "[SHAP] shap_values khong khop shape ky vong: "
+                f"got={shap_arr.shape}, expected=({n_samples}, {n_features})"
+            )
+        return shap_arr
+
+    def _build_pure_feature_names(
+        self,
+        dna_dim: int,
+        prot_dim: int,
+        bg_dim: int,
+        dataset,
+    ) -> list[str]:
+        names = []
+        names.extend([f"dna_pca_{i:03d}" for i in range(dna_dim or 0)])
+        names.extend([f"prot_pca_{i:03d}" for i in range(prot_dim or 0)])
+
+        bg_names = []
+        if bg_dim:
+            bg_names.extend(getattr(dataset, "bio_cols", []))
+            bg_names.extend(getattr(dataset, "geom_cols", []))
+            if len(bg_names) != bg_dim:
+                bg_names = [f"tabular_{i:03d}" for i in range(bg_dim)]
+        names.extend(bg_names)
+        return names
+
     def _save_shap(self, save_dir: str, xgb_model, x_background: np.ndarray, x_explain: np.ndarray, variant_ids: list, feature_names: list):
         if not self.explainability.get("enable_shap", False):
             return
@@ -260,10 +301,41 @@ class FusionBatchPipeline:
         x_ex = x_explain[ex_idx]
         ex_vids = [variant_ids[i] for i in ex_idx.tolist()]
 
-        explainer = shap.TreeExplainer(xgb_model)
-        shap_values = explainer.shap_values(x_ex)
-        if isinstance(shap_values, list):
-            shap_values = shap_values[0]
+        if len(feature_names) != x_ex.shape[1]:
+            print(
+                "[SHAP] So luong feature_names khong khop so cot input, bo qua SHAP: "
+                f"feature_names={len(feature_names)}, input_dim={x_ex.shape[1]}"
+            )
+            return
+
+        explainer_kwargs = {
+            "data": x_bg,
+            "feature_perturbation": self.explainability.get("shap_feature_perturbation", "interventional"),
+            "model_output": self.explainability.get("shap_model_output", "raw"),
+        }
+        try:
+            explainer = shap.TreeExplainer(xgb_model, **explainer_kwargs)
+        except Exception as exc:
+            print(
+                "[SHAP] Khong khoi tao duoc TreeExplainer voi background/interventional, "
+                f"fallback ve TreeExplainer mac dinh. Ly do: {exc}"
+            )
+            explainer = shap.TreeExplainer(xgb_model)
+
+        try:
+            raw_shap_values = explainer.shap_values(x_ex, check_additivity=False)
+        except TypeError:
+            raw_shap_values = explainer.shap_values(x_ex)
+
+        try:
+            shap_values = self._select_positive_shap_values(
+                raw_shap_values,
+                n_samples=x_ex.shape[0],
+                n_features=x_ex.shape[1],
+            )
+        except ValueError as exc:
+            print(str(exc))
+            return
 
         abs_mean = np.mean(np.abs(shap_values), axis=0)
         df_global = pd.DataFrame({"feature": feature_names, "mean_abs_shap": abs_mean})
@@ -271,15 +343,27 @@ class FusionBatchPipeline:
         df_global.to_csv(f"{save_dir}/shap_global_importance.csv", index=False)
 
         top_k = min(30, shap_values.shape[1])
-        top_features = df_global.head(top_k)["feature"].tolist()
-        top_indices = [feature_names.index(f) for f in top_features]
-        rows = []
+        local_rows = []
         for r, vid in enumerate(ex_vids):
-            row = {"Variant_ID": vid}
-            for feat, c in zip(top_features, top_indices):
-                row[f"shap_{feat}"] = float(shap_values[r, c])
-            rows.append(row)
-        pd.DataFrame(rows).to_csv(f"{save_dir}/shap_local_top_features.csv", index=False)
+            local_idx = np.argsort(np.abs(shap_values[r]))[::-1][:top_k]
+            for rank, c in enumerate(local_idx.tolist(), start=1):
+                local_rows.append({
+                    "Variant_ID": vid,
+                    "rank": rank,
+                    "feature": feature_names[c],
+                    "shap_value": float(shap_values[r, c]),
+                    "abs_shap": float(abs(shap_values[r, c])),
+                })
+        pd.DataFrame(local_rows).to_csv(f"{save_dir}/shap_local_top_ranked.csv", index=False)
+
+        pd.DataFrame([{
+            "background_samples": int(x_bg.shape[0]),
+            "explained_samples": int(x_ex.shape[0]),
+            "input_features": int(x_ex.shape[1]),
+            "feature_perturbation": explainer_kwargs["feature_perturbation"],
+            "model_output": explainer_kwargs["model_output"],
+            "class_explained": "positive_pathogenic",
+        }]).to_csv(f"{save_dir}/shap_run_info.csv", index=False)
 
     def _save_lime(self, save_dir: str, x_train: np.ndarray, x_explain: np.ndarray, variant_ids: list, feature_names: list, predict_proba_fn):
         if not self.explainability.get("enable_lime", False):
@@ -324,12 +408,34 @@ class FusionBatchPipeline:
                 })
         pd.DataFrame(rows).to_csv(f"{save_dir}/lime_local_explanations.csv", index=False)
 
-    def _run_xgb_explainability(self, exp_dir: str, xgb_model, x_train: np.ndarray, x_test: np.ndarray, variant_ids: list, feature_prefix: str):
+    def _run_xgb_explainability(
+        self,
+        exp_dir: str,
+        xgb_model,
+        x_train: np.ndarray,
+        x_test: np.ndarray,
+        variant_ids: list,
+        feature_prefix: str,
+        feature_names: list | None = None,
+    ):
         if x_train is None or x_test is None or len(variant_ids) == 0:
+            return
+        if x_train.shape[1] != x_test.shape[1]:
+            print(
+                "[Explainability] Train/test feature dimension khong khop, bo qua: "
+                f"train={x_train.shape[1]}, test={x_test.shape[1]}"
+            )
             return
         explain_dir = f"{exp_dir}/explainability"
         os.makedirs(explain_dir, exist_ok=True)
-        feature_names = self._feature_names(x_test.shape[1], feature_prefix)
+        if feature_names is None:
+            feature_names = self._feature_names(x_test.shape[1], feature_prefix)
+        if len(feature_names) != x_test.shape[1]:
+            print(
+                "[Explainability] So luong feature_names khong khop input_dim, bo qua: "
+                f"feature_names={len(feature_names)}, input_dim={x_test.shape[1]}"
+            )
+            return
         self._save_shap(explain_dir, xgb_model, x_train, x_test, variant_ids, feature_names)
         self._save_lime(explain_dir, x_train, x_test, variant_ids, feature_names, xgb_model.predict_proba)
 
@@ -579,6 +685,7 @@ class FusionBatchPipeline:
             elif exp["type"] == "hybrid":
                 profiler.profile_pytorch_fusion(model, d_in_safe)
                 xgb_manager = XGBoostFusionManager()
+                f_glob_tr = None
                 if os.path.exists(shared_hybrid_feat_path) and os.path.exists(shared_xgb_json_path):
                     print("[*] Reuse trained Hybrid artifacts from shared train/val cache")
                     model.load_state_dict(torch.load(shared_hybrid_feat_path, weights_only=True))
@@ -694,6 +801,12 @@ class FusionBatchPipeline:
                     x_train_pure = xgb_manager._build_pure_features(v_dna_pca_tr, v_prot_pca_tr, bg_tr_exp)
                     v_dna_pca_ts, v_prot_pca_ts = xgb_manager.transform_pca(dna_ts, prot_ts)
                     x_test_pure = xgb_manager._build_pure_features(v_dna_pca_ts, v_prot_pca_ts, bg_ts)
+                    pure_feature_names = self._build_pure_feature_names(
+                        dna_dim=0 if v_dna_pca_ts is None else v_dna_pca_ts.shape[1],
+                        prot_dim=0 if v_prot_pca_ts is None else v_prot_pca_ts.shape[1],
+                        bg_dim=0 if bg_ts is None else bg_ts.shape[1],
+                        dataset=test_loader.dataset,
+                    )
 
                     self._run_xgb_explainability(
                         exp_dir=test_out_dir,
@@ -702,6 +815,7 @@ class FusionBatchPipeline:
                         x_test=x_test_pure,
                         variant_ids=vids_t,
                         feature_prefix="xgb_pure",
+                        feature_names=pure_feature_names,
                     )
 
                     del dna_tr_exp, prot_tr_exp, bg_tr_exp
