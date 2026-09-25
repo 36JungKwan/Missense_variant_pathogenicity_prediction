@@ -107,7 +107,10 @@ class VariantFusionDataset(Dataset):
             self.bio_cols = [
                 "AF", "gnomADe_AF", "phyloP100way_vertebrate", "phyloP470way_mammalian", 
                 "phyloP17way_primate", "phastCons100way_vertebrate", "phastCons470way_mammalian", 
-                "phastCons17way_primate", "GERP++_RS", "GERP++_NR", "GERP_92_mammals"
+                "phastCons17way_primate", "GERP++_RS", "GERP++_NR", "GERP_92_mammals",
+                "SpliceAI_pred_DS_AG", "SpliceAI_pred_DS_AL", "SpliceAI_pred_DS_DG",
+                "SpliceAI_pred_DS_DL", "SpliceAI_pred_DP_AG", "SpliceAI_pred_DP_AL",
+                "SpliceAI_pred_DP_DG", "SpliceAI_pred_DP_DL", "SpliceAI_pred_DS_max"
             ]
             # [BẢN VÁ LỖI] Lọc NaN bằng np.nan_to_num
             bio_values = np.nan_to_num(self.df[self.bio_cols].values, nan=0.0)

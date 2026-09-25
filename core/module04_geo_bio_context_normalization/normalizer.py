@@ -25,6 +25,15 @@ class AdvancedFeatureNormalizer:
             "phyloP100way_vertebrate", "phyloP470way_mammalian", "phyloP17way_primate",
             "GERP++_RS", "GERP++_NR", "GERP_92_mammals"
         ]
+        self.bio_spliceai_score_cols = [
+            "SpliceAI_pred_DS_AG", "SpliceAI_pred_DS_AL", "SpliceAI_pred_DS_DG",
+            "SpliceAI_pred_DS_DL", "SpliceAI_pred_DS_max"
+        ]
+        self.bio_spliceai_position_cols = [
+            "SpliceAI_pred_DP_AG", "SpliceAI_pred_DP_AL", "SpliceAI_pred_DP_DG",
+            "SpliceAI_pred_DP_DL"
+        ]
+        self.bio_spliceai_cols = self.bio_spliceai_score_cols + self.bio_spliceai_position_cols
         self.bio_mean_impute_cols = self.bio_phast_cols + self.bio_phylo_gerp_cols
 
     def _coerce_numeric(self, df: pd.DataFrame, cols: list) -> pd.DataFrame:
@@ -44,7 +53,9 @@ class AdvancedFeatureNormalizer:
         df_out = df.copy()
         os.makedirs(artifacts_dir, exist_ok=True)
         
-        df_out = self._coerce_numeric(df_out, self.bio_freq_cols + self.bio_mean_impute_cols)
+        df_out = self._coerce_numeric(
+            df_out, self.bio_freq_cols + self.bio_mean_impute_cols + self.bio_spliceai_cols
+        )
 
         # 1. Tần số (AF): Điền 0 -> Log10(x + eps) -> StandardScaler
         df_out[self.bio_freq_cols] = df_out[self.bio_freq_cols].fillna(0.0)
@@ -57,6 +68,13 @@ class AdvancedFeatureNormalizer:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             df_out[self.bio_mean_impute_cols] = mean_imputer.fit_transform(df_out[self.bio_mean_impute_cols])
+
+        # Missing lookup records mean the variant is absent from the MANE VCF,
+        # not that it has a zero splice effect. Learn fill values from train only.
+        spliceai_fill_values = df_out[self.bio_spliceai_cols].median().fillna(0.0)
+        df_out[self.bio_spliceai_cols] = df_out[self.bio_spliceai_cols].fillna(spliceai_fill_values)
+        spliceai_scaler = StandardScaler()
+        df_out[self.bio_spliceai_cols] = spliceai_scaler.fit_transform(df_out[self.bio_spliceai_cols])
 
         # 3. PhastCons: StandardScaler
         phast_scaler = StandardScaler()
@@ -71,6 +89,8 @@ class AdvancedFeatureNormalizer:
         joblib.dump(freq_scaler, f"{artifacts_dir}/bio_freq_scaler.pkl")
         joblib.dump(phast_scaler, f"{artifacts_dir}/bio_phast_scaler.pkl")
         joblib.dump(phylo_scaler, f"{artifacts_dir}/bio_phylo_scaler.pkl")
+        joblib.dump(spliceai_fill_values, f"{artifacts_dir}/bio_spliceai_fill_values.pkl")
+        joblib.dump(spliceai_scaler, f"{artifacts_dir}/bio_spliceai_scaler.pkl")
         
         return df_out
 
@@ -78,13 +98,17 @@ class AdvancedFeatureNormalizer:
         """Luồng Đánh giá: Nạp .pkl tĩnh để chuẩn hóa tập Val/Test."""
         print(f"[*] Đang nạp Artifacts để chuẩn hóa tập Val/Test ({len(df)} variants)...")
         df_out = df.copy()
-        df_out = self._coerce_numeric(df_out, self.bio_freq_cols + self.bio_mean_impute_cols)
+        df_out = self._coerce_numeric(
+            df_out, self.bio_freq_cols + self.bio_mean_impute_cols + self.bio_spliceai_cols
+        )
         
         # Tải Artifacts
         mean_imputer = joblib.load(f"{artifacts_dir}/bio_mean_imputer.pkl")
         freq_scaler = joblib.load(f"{artifacts_dir}/bio_freq_scaler.pkl")
         phast_scaler = joblib.load(f"{artifacts_dir}/bio_phast_scaler.pkl")
         phylo_scaler = joblib.load(f"{artifacts_dir}/bio_phylo_scaler.pkl")
+        spliceai_fill_values = joblib.load(f"{artifacts_dir}/bio_spliceai_fill_values.pkl")
+        spliceai_scaler = joblib.load(f"{artifacts_dir}/bio_spliceai_scaler.pkl")
         
         df_out[self.bio_freq_cols] = df_out[self.bio_freq_cols].fillna(0.0)
         df_out[self.bio_freq_cols] = freq_scaler.transform(np.log10(df_out[self.bio_freq_cols] + self.epsilon))
@@ -95,6 +119,8 @@ class AdvancedFeatureNormalizer:
             
         df_out[self.bio_phast_cols] = phast_scaler.transform(df_out[self.bio_phast_cols])
         df_out[self.bio_phylo_gerp_cols] = phylo_scaler.transform(df_out[self.bio_phylo_gerp_cols])
+        df_out[self.bio_spliceai_cols] = df_out[self.bio_spliceai_cols].fillna(spliceai_fill_values)
+        df_out[self.bio_spliceai_cols] = spliceai_scaler.transform(df_out[self.bio_spliceai_cols])
 
         return df_out
 
