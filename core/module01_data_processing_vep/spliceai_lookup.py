@@ -7,6 +7,7 @@ score file is never loaded into memory.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 import gzip
 from pathlib import Path
@@ -32,6 +33,7 @@ SPLICEAI_FEATURE_COLUMNS = [
 _BASES = frozenset({"A", "C", "G", "T"})
 _SCORE_COLUMNS = SPLICEAI_FEATURE_COLUMNS[:4]
 _POSITION_COLUMNS = SPLICEAI_FEATURE_COLUMNS[4:8]
+_COMPLEMENT = str.maketrans("ACGT", "TGCA")
 
 
 def canonical_chromosome(value: object) -> str | None:
@@ -53,6 +55,11 @@ def _as_float(value: str) -> float:
         return float(value)
     except ValueError:
         return np.nan
+
+
+def reverse_complement_allele(allele: str) -> str:
+    """Return the genomic-strand representation of a valid SNV allele."""
+    return allele.translate(_COMPLEMENT)[::-1]
 
 
 def _parse_spliceai_annotation(annotation: str) -> np.ndarray | None:
@@ -184,7 +191,9 @@ class NativeTabixReader:
         if end <= start:
             return []
         end -= 1
-        bins = [0]
+        # The VCF contains only SNVs. A root-bin chunk spans an entire
+        # chromosome and is only needed for records larger than 512 Mb.
+        bins = []
         for level in range(1, cls._DEPTH + 1):
             shift = cls._MIN_SHIFT + 3 * (cls._DEPTH - level)
             first = ((1 << (3 * level)) - 1) // 7 + (start >> shift)
@@ -286,6 +295,7 @@ class SpliceAILookupReport:
     unique_eligible_snvs: int
     matched_unique_snvs: int
     matched_rows: int
+    reverse_complement_matched_rows: int
     unavailable_rows: int
 
     def as_dict(self) -> dict[str, int | float]:
@@ -296,6 +306,7 @@ class SpliceAILookupReport:
             "unique_eligible_snvs": self.unique_eligible_snvs,
             "matched_unique_snvs": self.matched_unique_snvs,
             "matched_rows": self.matched_rows,
+            "reverse_complement_matched_rows": self.reverse_complement_matched_rows,
             "unavailable_rows": self.unavailable_rows,
             "eligible_row_coverage": round(coverage, 6),
         }
@@ -340,23 +351,52 @@ class IndexedSpliceAILookup:
         return prepared
 
     def _lookup_unique_variants(self, unique_variants: pd.DataFrame) -> pd.DataFrame:
-        matched: dict[tuple[str, int, str, str], np.ndarray] = {}
+        # Query exact genomic alleles and a lower-priority reverse-complement
+        # fallback. ProteinGym stores some variants on transcript orientation.
+        query = unique_variants.copy()
+        query["_source_chrom"] = query["_chrom"]
+        query["_source_pos"] = query["_pos"]
+        query["_source_ref"] = query["_ref"]
+        query["_source_alt"] = query["_alt"]
+        query["_match_type"] = "exact"
+
+        reverse_query = query.copy()
+        reverse_query["_ref"] = reverse_query["_ref"].map(reverse_complement_allele)
+        reverse_query["_alt"] = reverse_query["_alt"].map(reverse_complement_allele)
+        reverse_query["_match_type"] = "reverse_complement"
+        query = pd.concat([query, reverse_query], ignore_index=True)
+
+        # original key -> (priority, match type, SpliceAI values)
+        matched: dict[tuple[str, int, str, str], tuple[int, str, np.ndarray]] = {}
 
         tabix = NativeTabixReader(self.vcf_path)
         try:
             contig_aliases = _vcf_contig_aliases(tabix.contigs)
-            query = unique_variants.copy()
             query["_vcf_contig"] = query["_chrom"].map(contig_aliases)
             query = query.dropna(subset=["_vcf_contig"])
             query["_window"] = (query["_pos"] - 1) // self.window_size
 
             for (contig, window), group in query.groupby(["_vcf_contig", "_window"], sort=False):
-                requested = {
-                    (chrom, int(pos), ref, alt)
-                    for chrom, pos, ref, alt in group[["_chrom", "_pos", "_ref", "_alt"]].itertuples(
-                        index=False, name=None
+                requested: dict[tuple[str, int, str, str], list[tuple[tuple[str, int, str, str], str]]] = defaultdict(list)
+                for (
+                    chrom,
+                    pos,
+                    ref,
+                    alt,
+                    source_chrom,
+                    source_pos,
+                    source_ref,
+                    source_alt,
+                    match_type,
+                ) in group[
+                    [
+                        "_chrom", "_pos", "_ref", "_alt", "_source_chrom", "_source_pos",
+                        "_source_ref", "_source_alt", "_match_type"
+                    ]
+                ].itertuples(index=False, name=None):
+                    requested[(chrom, int(pos), ref, alt)].append(
+                        ((source_chrom, int(source_pos), source_ref, source_alt), match_type)
                     )
-                }
                 start = int(window) * self.window_size
                 end = start + self.window_size
 
@@ -372,19 +412,26 @@ class IndexedSpliceAILookup:
                     ref = fields[3].upper()
                     for alt in fields[4].upper().split(","):
                         key = (chrom, pos, ref, alt)
-                        if key not in requested:
+                        candidates = requested.get(key)
+                        if not candidates:
                             continue
                         values = parse_spliceai_info(fields[7], alt)
                         if values is None:
                             continue
-                        current = matched.get(key)
-                        if current is None or np.nanmax(values[:4]) > np.nanmax(current[:4]):
-                            matched[key] = values
+                        for source_key, match_type in candidates:
+                            priority = 0 if match_type == "exact" else 1
+                            current = matched.get(source_key)
+                            if (
+                                current is None
+                                or priority < current[0]
+                                or (priority == current[0] and np.nanmax(values[:4]) > np.nanmax(current[2][:4]))
+                            ):
+                                matched[source_key] = (priority, match_type, values)
         finally:
             tabix.close()
 
         rows = []
-        for (chrom, pos, ref, alt), values in matched.items():
+        for (chrom, pos, ref, alt), (_, match_type, values) in matched.items():
             rows.append(
                 {
                     "_chrom": chrom,
@@ -393,9 +440,13 @@ class IndexedSpliceAILookup:
                     "_alt": alt,
                     **dict(zip(_SCORE_COLUMNS + _POSITION_COLUMNS, values, strict=True)),
                     "SpliceAI_pred_DS_max": float(np.nanmax(values[:4])),
+                    "_spliceai_match_type": match_type,
                 }
             )
-        return pd.DataFrame(rows, columns=["_chrom", "_pos", "_ref", "_alt", *SPLICEAI_FEATURE_COLUMNS])
+        return pd.DataFrame(
+            rows,
+            columns=["_chrom", "_pos", "_ref", "_alt", *SPLICEAI_FEATURE_COLUMNS, "_spliceai_match_type"],
+        )
 
     def enrich(self, df: pd.DataFrame) -> tuple[pd.DataFrame, SpliceAILookupReport]:
         prepared = self._validate_and_prepare(df)
@@ -413,12 +464,16 @@ class IndexedSpliceAILookup:
             out.loc[mapped["_row"].to_numpy(), SPLICEAI_FEATURE_COLUMNS] = mapped_values
 
         matched_rows = int(out["SpliceAI_pred_DS_max"].notna().sum())
+        reverse_complement_rows = 0
+        if not prepared.empty and not matches.empty:
+            reverse_complement_rows = int(mapped["_spliceai_match_type"].eq("reverse_complement").sum())
         report = SpliceAILookupReport(
             total_rows=len(df),
             eligible_snv_rows=len(prepared),
             unique_eligible_snvs=len(unique_variants),
             matched_unique_snvs=len(matches),
             matched_rows=matched_rows,
+            reverse_complement_matched_rows=reverse_complement_rows,
             unavailable_rows=len(df) - matched_rows,
         )
         return out, report

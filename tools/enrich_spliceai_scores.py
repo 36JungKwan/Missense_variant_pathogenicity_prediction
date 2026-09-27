@@ -72,9 +72,19 @@ def main() -> None:
     summary = {
         "spliceai_vcf": str(args.vcf),
         "genome_build": "GRCh38",
-        "aggregation": "annotation with largest DS_max; scores and positions retained from that annotation",
+        "aggregation": (
+            "exact allele match preferred; reverse-complement fallback when exact matching fails; "
+            "scores and positions retained from annotation with largest DS_max"
+        ),
         "datasets": {},
     }
+    if args.report.is_file():
+        try:
+            previous_summary = json.loads(args.report.read_text(encoding="utf-8"))
+            if isinstance(previous_summary.get("datasets"), dict):
+                summary["datasets"] = previous_summary["datasets"]
+        except (OSError, json.JSONDecodeError):
+            print(f"[CẢNH BÁO] Không đọc được report cũ, sẽ tạo report mới: {args.report}")
 
     for source in inputs:
         target = spliceai_output_path(source)
