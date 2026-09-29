@@ -13,19 +13,32 @@ class BioSequenceDataset(Dataset):
     """
     Dataset tối ưu để nạp dữ liệu từ file Parquet thành các batch cho PyTorch.
     """
-    def __init__(self, parquet_path: str, seq_type: str):
+    def __init__(self, parquet_path: str, seq_type: str, ref_col: str = None, alt_col: str = None):
         """
         Args:
             parquet_path: Đường dẫn file Parquet.
-            seq_type: "dna" (để lấy DNA_Ref/Alt) hoặc "protein" (để lấy Protein_Ref/Alt)
+            seq_type: "dna" hoặc "protein".
+            ref_col/alt_col: cột sequence được chọn cho lần chạy hiện tại.
         """
         self.df = pd.read_parquet(parquet_path)
         self.seq_type = seq_type
         self.default_variant_pos = 300 if seq_type == "dna" else 50
         
-        # Ánh xạ cột dựa trên loại chuỗi
-        self.ref_col = "ref_seq" if seq_type == "dna" else "prot_ref_seq"
-        self.alt_col = "alt_seq" if seq_type == "dna" else "prot_alt_seq"
+        if (ref_col is None) != (alt_col is None):
+            raise ValueError("ref_col và alt_col phải được truyền cùng nhau.")
+
+        # Baseline hiện tại dùng một length cố định; truyền explicit columns để
+        # các length khác có thể được chạy sau này như một ablation riêng.
+        if ref_col is None:
+            if seq_type == "dna":
+                ref_col, alt_col = "ref_seq_601", "alt_seq_601"
+            elif seq_type == "protein":
+                ref_col, alt_col = "prot_ref_seq_101", "prot_alt_seq_101"
+            else:
+                raise ValueError(f"seq_type không hợp lệ: {seq_type}")
+
+        self.ref_col = ref_col
+        self.alt_col = alt_col
         
         # Đảm bảo dữ liệu tồn tại
         if self.ref_col not in self.df.columns or self.alt_col not in self.df.columns:
@@ -280,9 +293,18 @@ class FeatureExtractor:
             else:
                 raise e
 
-    def run_extraction(self, parquet_path: str, seq_type: str, batch_size: int, output_prefix: str, profiler=None):
+    def run_extraction(
+        self,
+        parquet_path: str,
+        seq_type: str,
+        batch_size: int,
+        output_prefix: str,
+        profiler=None,
+        ref_col: str = None,
+        alt_col: str = None,
+    ):
         """Chạy toàn bộ file Parquet và lưu 3 file .pt cho 3 chiến lược pooling"""
-        dataset = BioSequenceDataset(parquet_path, seq_type)
+        dataset = BioSequenceDataset(parquet_path, seq_type, ref_col=ref_col, alt_col=alt_col)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
         all_results = {

@@ -159,7 +159,11 @@ class BioModelManager:
         """
         self.model_id = model_id
         self.model_type = model_type.lower()
-        self.device = device
+        requested_device = str(device)
+        if requested_device.startswith("cuda") and not torch.cuda.is_available():
+            print("[!] CUDA không khả dụng; chuyển Foundation Model sang CPU.")
+            requested_device = "cpu"
+        self.device = requested_device
         
         self.tokenizer = None
         self.model = None

@@ -183,8 +183,32 @@ class FusionBatchPipeline:
         self.dna_models = [m for m in self.models_space if m["seq_type"] == "dna"]
         self.prot_models = [m for m in self.models_space if m["seq_type"] == "protein"]
 
+    @staticmethod
+    def _canonical_key_value(value):
+        """Normalize CSV null spellings so resume keys stay stable across runs."""
+        if value is None:
+            return "None"
+        try:
+            if pd.isna(value):
+                return "None"
+        except (TypeError, ValueError):
+            pass
+
+        text = str(value).strip()
+        if not text or text.lower() in {"none", "nan", "null"}:
+            return "None"
+        return text
+
     def _build_run_key(self, dataset_name, pooling, dna_name, prot_name, ablation_str, network_name):
-        return f"{dataset_name}_{pooling}_{dna_name}_{prot_name}_{ablation_str}_{network_name}"
+        values = [
+            dataset_name,
+            pooling,
+            dna_name,
+            prot_name,
+            ablation_str,
+            network_name,
+        ]
+        return "_".join(self._canonical_key_value(value) for value in values)
 
     def _load_resume_state(self):
         global_metrics = []
@@ -197,7 +221,7 @@ class FusionBatchPipeline:
             if all(col in df_metrics.columns for col in req_cols):
                 for row in df_metrics.to_dict(orient="records"):
                     global_metrics.append(row)
-                    pooling = row["Pooling"]
+                    pooling = self._canonical_key_value(row["Pooling"])
                     key = self._build_run_key(
                         row["Dataset"],
                         row["Pooling"],
@@ -503,6 +527,9 @@ class FusionBatchPipeline:
         train_loader = self._get_dataloader(dataset_cfg["train"], pooling, dna_name, prot_name, active_mods, True)
         val_loader = self._get_dataloader(dataset_cfg["val"], pooling, dna_name, prot_name, active_mods, False)
         test_loader = self._get_dataloader(dataset_cfg["test"], pooling, dna_name, prot_name, active_mods, False)
+        train_dataset = train_loader.dataset
+        bio_dim = len(train_dataset.bio_cols) if train_dataset.has_bio else 0
+        geom_dim = len(train_dataset.geom_cols) if train_dataset.has_geom else 0
 
         for exp, run_key in tasks_to_run:
             completed_keys.add(run_key)
@@ -538,6 +565,8 @@ class FusionBatchPipeline:
                 dna_in_dim=dna_dim,
                 prot_in_dim=prot_dim,
                 active_modalities=active_mods,
+                bio_in_dim=bio_dim,
+                geom_in_dim=geom_dim,
                 fusion_strategy=exp["fusion"],
             ).to(self.device)
 
@@ -973,6 +1002,65 @@ class FusionBatchPipeline:
 
                 # Stage 2: train one config then test all test splits in this train/val group.
                 for dna_cfg, prot_cfg, active_mods in stage2_cfgs:
+                    for exp in self.experiments:
+                        for ds_cfg in group_ds_cfgs:
+                            self._run_group(
+                                dna_cfg,
+                                prot_cfg,
+                                pooling,
+                                active_mods,
+                                ds_cfg,
+                                completed_keys,
+                                global_metrics,
+                                global_profiling,
+                                experiments_subset=[exp],
+                            )
+
+                # Stage 3: SpliceAI is a single nine-feature group; geometry
+                # remains extracted but is deliberately excluded from these runs.
+                stage3_cfgs = []
+                for dna_cfg in self.dna_models:
+                    stage3_cfgs.append((dna_cfg, None, ["dna", "spliceai"]))
+                    stage3_cfgs.append((dna_cfg, None, ["dna", "bio_core", "spliceai"]))
+
+                for prot_cfg in self.prot_models:
+                    stage3_cfgs.append((None, prot_cfg, ["prot", "spliceai"]))
+                    stage3_cfgs.append((None, prot_cfg, ["prot", "bio_core", "spliceai"]))
+
+                for dna_cfg in self.dna_models:
+                    for prot_cfg in self.prot_models:
+                        stage3_cfgs.append((dna_cfg, prot_cfg, ["dna", "prot", "spliceai"]))
+                        stage3_cfgs.append((dna_cfg, prot_cfg, ["dna", "prot", "bio_core", "spliceai"]))
+
+                esm1v_cfg = next((m for m in self.prot_models if m["name"] == "esm1v_650m"), None)
+                if esm1v_cfg is None:
+                    raise ValueError(
+                        "Stage 3 can only run after esm1v_650m is added to MODELS_SPACE."
+                    )
+                for dna_cfg in self.dna_models:
+                    # This no-SpliceAI baseline has already been run for the
+                    # older protein models, so it is intentionally ESM-1v-only.
+                    stage3_cfgs.append((dna_cfg, esm1v_cfg, ["dna", "prot", "bio_core"]))
+
+                # bio_core + spliceai has no foundation-model or pooling input.
+                # Run it once, under the canonical center label, rather than
+                # duplicating the same experiment for each pooling iteration.
+                if pooling == "center":
+                    for exp in self.experiments:
+                        for ds_cfg in group_ds_cfgs:
+                            self._run_group(
+                                None,
+                                None,
+                                "center",
+                                ["bio_core", "spliceai"],
+                                ds_cfg,
+                                completed_keys,
+                                global_metrics,
+                                global_profiling,
+                                experiments_subset=[exp],
+                            )
+
+                for dna_cfg, prot_cfg, active_mods in stage3_cfgs:
                     for exp in self.experiments:
                         for ds_cfg in group_ds_cfgs:
                             self._run_group(

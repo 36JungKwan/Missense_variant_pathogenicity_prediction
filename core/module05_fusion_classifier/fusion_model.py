@@ -32,7 +32,8 @@ class MultiStrategyFusionModel(nn.Module):
         # Xác định sự hiện diện của các nhánh
         self.has_dna = 'dna' in self.active_mods
         self.has_prot = 'prot' in self.active_mods
-        self.has_bio = 'bio' in self.active_mods
+        # ``bio`` remains the legacy bio-core branch; SpliceAI is explicit.
+        self.has_bio = bool({'bio', 'bio_core', 'spliceai'} & set(self.active_mods))
         self.has_geom = 'geom' in self.active_mods
         
         self.num_seq_mods = int(self.has_dna) + int(self.has_prot)

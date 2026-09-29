@@ -4,6 +4,20 @@ import pandas as pd
 import numpy as np
 import gc
 
+
+BIO_CORE_COLUMNS = [
+    "AF", "gnomADe_AF", "phyloP100way_vertebrate", "phyloP470way_mammalian",
+    "phyloP17way_primate", "phastCons100way_vertebrate", "phastCons470way_mammalian",
+    "phastCons17way_primate", "GERP++_RS", "GERP++_NR", "GERP_92_mammals",
+]
+
+SPLICEAI_COLUMNS = [
+    "SpliceAI_pred_DS_AG", "SpliceAI_pred_DS_AL", "SpliceAI_pred_DS_DG",
+    "SpliceAI_pred_DS_DL", "SpliceAI_pred_DP_AG", "SpliceAI_pred_DP_AL",
+    "SpliceAI_pred_DP_DG", "SpliceAI_pred_DP_DL", "SpliceAI_pred_DS_max",
+]
+
+
 class VariantFusionDataset(Dataset):
     """
     Module 5 Dataset: Điểm hội tụ Đa phương thức (Multi-modal Fusion).
@@ -29,7 +43,11 @@ class VariantFusionDataset(Dataset):
         
         self.has_dna = 'dna' in self.active_mods
         self.has_prot = 'prot' in self.active_mods
-        self.has_bio = 'bio' in self.active_mods
+        # ``bio`` is the legacy 11-feature group. SpliceAI is opt-in through
+        # the explicit ``spliceai`` token so old checkpoints remain compatible.
+        self.has_bio_core = 'bio' in self.active_mods or 'bio_core' in self.active_mods
+        self.has_spliceai = 'spliceai' in self.active_mods
+        self.has_bio = self.has_bio_core or self.has_spliceai
         self.has_geom = 'geom' in self.active_mods
 
         # =====================================================================
@@ -104,14 +122,18 @@ class VariantFusionDataset(Dataset):
         # 3. GOM NHÓM ĐẶC TRƯNG BẢNG & LỌC NaN
         # =====================================================================
         if self.has_bio:
-            self.bio_cols = [
-                "AF", "gnomADe_AF", "phyloP100way_vertebrate", "phyloP470way_mammalian", 
-                "phyloP17way_primate", "phastCons100way_vertebrate", "phastCons470way_mammalian", 
-                "phastCons17way_primate", "GERP++_RS", "GERP++_NR", "GERP_92_mammals",
-                "SpliceAI_pred_DS_AG", "SpliceAI_pred_DS_AL", "SpliceAI_pred_DS_DG",
-                "SpliceAI_pred_DS_DL", "SpliceAI_pred_DP_AG", "SpliceAI_pred_DP_AL",
-                "SpliceAI_pred_DP_DG", "SpliceAI_pred_DP_DL", "SpliceAI_pred_DS_max"
-            ]
+            self.bio_cols = []
+            if self.has_bio_core:
+                self.bio_cols.extend(BIO_CORE_COLUMNS)
+            if self.has_spliceai:
+                self.bio_cols.extend(SPLICEAI_COLUMNS)
+
+            missing_bio_cols = [col for col in self.bio_cols if col not in self.df.columns]
+            if missing_bio_cols:
+                raise KeyError(
+                    "Thieu cot bio/spliceai trong normalized parquet: "
+                    f"{missing_bio_cols}"
+                )
             # [BẢN VÁ LỖI] Lọc NaN bằng np.nan_to_num
             bio_values = np.nan_to_num(self.df[self.bio_cols].values, nan=0.0)
             self.bio_tensor = torch.tensor(bio_values, dtype=torch.float32)
