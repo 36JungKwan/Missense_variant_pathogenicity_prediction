@@ -22,7 +22,6 @@ class BioSequenceDataset(Dataset):
         """
         self.df = pd.read_parquet(parquet_path)
         self.seq_type = seq_type
-        self.default_variant_pos = 300 if seq_type == "dna" else 50
         
         if (ref_col is None) != (alt_col is None):
             raise ValueError("ref_col và alt_col phải được truyền cùng nhau.")
@@ -43,6 +42,26 @@ class BioSequenceDataset(Dataset):
         # Đảm bảo dữ liệu tồn tại
         if self.ref_col not in self.df.columns or self.alt_col not in self.df.columns:
             raise ValueError(f"File Parquet thiếu cột {self.ref_col} hoặc {self.alt_col}")
+
+        # Sequence-length ablations use the same centered variant convention
+        # as the Module 1 sequence columns. Infer the 0-based center from the
+        # selected column instead of reusing the 601/101 baseline positions.
+        ref_lengths = self.df[self.ref_col].dropna().astype(str).str.len()
+        alt_lengths = self.df[self.alt_col].dropna().astype(str).str.len()
+        if len(ref_lengths) == 0 or len(alt_lengths) == 0:
+            raise ValueError(f"Cột sequence rỗng: {self.ref_col}/{self.alt_col}")
+        if ref_lengths.nunique() != 1 or alt_lengths.nunique() != 1:
+            raise ValueError(
+                f"Sequence length không cố định cho {self.ref_col}/{self.alt_col}: "
+                f"ref={sorted(ref_lengths.unique().tolist())[:5]}, "
+                f"alt={sorted(alt_lengths.unique().tolist())[:5]}"
+            )
+        if int(ref_lengths.iloc[0]) != int(alt_lengths.iloc[0]):
+            raise ValueError(
+                f"Ref/alt sequence khác length cho {self.ref_col}/{self.alt_col}: "
+                f"ref={int(ref_lengths.iloc[0])}, alt={int(alt_lengths.iloc[0])}"
+            )
+        self.default_variant_pos = int(ref_lengths.iloc[0]) // 2
 
         # Tìm cột vị trí đột biến nếu có để tránh phụ thuộc hoàn toàn vào vị trí hard-code.
         # Luu y: khong dung cot POS/pos vi thuong la toa do genomic goc,

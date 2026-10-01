@@ -100,14 +100,38 @@ SOTA_THRESHOLDS = {
     "MetaLR": {"rankscore": 0.81101, "score": 0.5},
     "MetaRNN": {"rankscore": 0.6149, "score": 0.5},
     "M-CAP": {"score": 0.025},
+    "REVEL": {"score": 0.5},
+    "MVP": {"score": 0.75},
+    "gMVP": {"score": 0.5},
     "MisFit_D": {"score": 0.45},
+    "MPC": {"score": 2.0},
     "PrimateAI": {"score": 0.803},
     "BayesDel_addAF": {"score": 0.0692655},
     "BayesDel_noAF": {"score": -0.0570105},
     "ClinPred": {"score": 0.5},
     "LIST-S2": {"score": 0.85},
+    "VARITY_R": {"score": 0.5},
+    "VARITY_ER": {"score": 0.5},
     "PHACTboost": {"score": 0.62},
     "MutFormer": {"score": 0.8838},
+    "DANN": {"score": 0.9},
+}
+
+
+# Module 1 creates these predictions because dbNSFP/VEP does not provide a
+# native *_pred field for them. Keep this table aligned with that notebook so
+# the benchmark can audit the generated labels instead of trusting them blindly.
+SOTA_SCORE_PRED_RULES: dict[str, tuple[str, float]] = {
+    "PHACTboost": ("PHACTboost_score", 0.62),
+    "MutFormer": ("MutFormer_score", 0.8838),
+    "MVP": ("MVP_score", 0.75),
+    "REVEL": ("REVEL_score", 0.5),
+    "CADD": ("CADD_phred", 20.0),
+    "DANN": ("DANN_score", 0.9),
+    "gMVP": ("gMVP_score", 0.5),
+    "MPC": ("MPC_score", 2.0),
+    "VARITY_R": ("VARITY_R_score", 0.5),
+    "VARITY_ER": ("VARITY_ER_score", 0.5),
 }
 
 
@@ -237,12 +261,11 @@ def _resolve_model_threshold(
     if not isinstance(spec, dict):
         return float(default_threshold)
 
+    # Do not reuse a score threshold for rankscore (or vice versa).  A raw
+    # score and its rankscore can have different scales; for example,
+    # BayesDel scores can be negative while rankscore is in [0, 1].
     if prob_kind in spec:
         return float(spec[prob_kind])
-    if "rankscore" in spec:
-        return float(spec["rankscore"])
-    if "score" in spec:
-        return float(spec["score"])
     return float(default_threshold)
 
 
@@ -418,12 +441,12 @@ def _choose_prob_pred(
     )
     if pred_col:
         y_pred_raw = _to_binary_pred(df[pred_col], model_name=model_name)
-        y_pred = (y_prob > used_threshold).astype(int)
+        y_pred = (y_prob >= used_threshold).astype(int)
         known_mask = ~np.isnan(y_pred_raw)
         y_pred[known_mask] = y_pred_raw[known_mask].astype(int)
         pred_source = pred_col
     else:
-        y_pred = (y_prob > used_threshold).astype(int)
+        y_pred = (y_prob >= used_threshold).astype(int)
         pred_source = f"threshold@{used_threshold}"
 
     return y_prob, y_pred, pred_source, prob_col, prob_kind, used_threshold
@@ -492,6 +515,7 @@ def evaluate_sota_from_test_files(
 
     metrics_rows: list[dict[str, Any]] = []
     mapping_rows: list[dict[str, Any]] = []
+    audit_rows: list[dict[str, Any]] = []
 
     audit_info = None
     if required_columns is not None:
@@ -542,6 +566,28 @@ def evaluate_sota_from_test_files(
                 continue
 
             m = _safe_binary_metrics(y_true, y_prob, y_pred)
+            threshold_pred = (y_prob >= used_threshold).astype(int)
+            threshold_metrics = _safe_binary_metrics(y_true, y_prob, threshold_pred)
+            pred_col = _first_existing(df, spec.get("pred"))
+            pred_raw = _to_binary_pred(df[pred_col], model_name=model_name) if pred_col else None
+            unknown_pred_count = int(np.isnan(pred_raw).sum()) if pred_raw is not None else 0
+            rule_score_col, rule_threshold = SOTA_SCORE_PRED_RULES.get(model_name, (None, None))
+            rule_score = pd.to_numeric(df[rule_score_col], errors="coerce") if rule_score_col in df.columns else None
+            if rule_score is not None and pred_raw is not None:
+                rule_mask = rule_score.notna().to_numpy() & ~np.isnan(pred_raw)
+                expected_rule_pred = (rule_score.fillna(0.0).to_numpy() >= float(rule_threshold)).astype(float)
+                rule_mismatch_count = int(np.sum(pred_raw[rule_mask] != expected_rule_pred[rule_mask]))
+                rule_checked_count = int(rule_mask.sum())
+            else:
+                rule_mismatch_count = 0
+                rule_checked_count = 0
+            if pred_col is None:
+                binary_metric_source = "threshold"
+            elif unknown_pred_count > 0:
+                binary_metric_source = "pred+threshold_fallback"
+            else:
+                binary_metric_source = "pred"
+
             metrics_rows.append({
                 "Dataset": dataset_name,
                 "Network": f"SOTA_{model_name}",
@@ -563,6 +609,42 @@ def evaluate_sota_from_test_files(
                 "resolved_threshold": used_threshold,
                 "pred_source": pred_source,
                 "label_col": resolved_label_col,
+                "binary_metric_source": binary_metric_source,
+                "pred_known_count": int(len(df) - unknown_pred_count) if pred_col else 0,
+                "pred_unknown_count": unknown_pred_count,
+                "pred_positive_count": int(np.nansum(pred_raw == 1.0)) if pred_raw is not None else 0,
+                "threshold_positive_count": int(threshold_pred.sum()),
+                "pred_threshold_disagreement_count": int(np.sum(y_pred != threshold_pred)),
+                "module1_rule_score_col": rule_score_col,
+                "module1_rule_threshold": rule_threshold,
+                "module1_rule_checked_count": rule_checked_count,
+                "module1_rule_mismatch_count": rule_mismatch_count,
+            })
+            audit_rows.append({
+                "Dataset": dataset_name,
+                "Model": model_name,
+                "N": int(len(df)),
+                "label_col": resolved_label_col,
+                "prob_col": prob_col,
+                "prob_kind": prob_kind,
+                "threshold": used_threshold,
+                "pred_col": pred_col,
+                "binary_metric_source": binary_metric_source,
+                "pred_known_count": int(len(df) - unknown_pred_count) if pred_col else 0,
+                "pred_unknown_count": unknown_pred_count,
+                "pred_positive_count": int(np.nansum(pred_raw == 1.0)) if pred_raw is not None else 0,
+                "threshold_positive_count": int(threshold_pred.sum()),
+                "pred_threshold_disagreement_count": int(np.sum(y_pred != threshold_pred)),
+                "module1_rule_score_col": rule_score_col,
+                "module1_rule_threshold": rule_threshold,
+                "module1_rule_checked_count": rule_checked_count,
+                "module1_rule_mismatch_count": rule_mismatch_count,
+                "current_MCC": m["MCC"],
+                "threshold_MCC": threshold_metrics["MCC"],
+                "delta_MCC_current_minus_threshold": round(float(m["MCC"] - threshold_metrics["MCC"]), 4),
+                "current_F1": m["F1_Score"],
+                "threshold_F1": threshold_metrics["F1_Score"],
+                "delta_F1_current_minus_threshold": round(float(m["F1_Score"] - threshold_metrics["F1_Score"]), 4),
             })
 
     df_metrics = pd.DataFrame(metrics_rows)
@@ -570,12 +652,15 @@ def evaluate_sota_from_test_files(
 
     metrics_path = f"{output_dir}/sota_metrics.csv"
     mapping_path = f"{output_dir}/sota_column_mapping.csv"
+    audit_path = f"{output_dir}/sota_metric_audit.csv"
     df_metrics.to_csv(metrics_path, index=False)
     df_mapping.to_csv(mapping_path, index=False)
+    pd.DataFrame(audit_rows).to_csv(audit_path, index=False)
 
     return {
         "metrics_path": metrics_path,
         "mapping_path": mapping_path,
+        "metric_audit_path": audit_path,
         "num_rows": int(len(df_metrics)),
         "num_models": int(df_metrics["Network"].nunique()) if len(df_metrics) > 0 else 0,
         "audit": audit_info,

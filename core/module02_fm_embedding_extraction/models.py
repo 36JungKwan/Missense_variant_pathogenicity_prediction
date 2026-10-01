@@ -113,9 +113,6 @@ def _patch_remote_esm_instance_if_needed(model):
         if esm_core is None:
             return False
 
-        if hasattr(esm_core, "get_head_mask"):
-            return False
-
         def _compat_get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
             if head_mask is None:
                 return [None] * num_hidden_layers
@@ -134,14 +131,68 @@ def _patch_remote_esm_instance_if_needed(model):
                 head_mask = head_mask.unsqueeze(-1)
             return head_mask
 
+        def _compat_get_extended_attention_mask(
+            self,
+            attention_mask,
+            input_shape,
+            device=None,
+            dtype=None,
+        ):
+            """Compatibility implementation removed from newer Transformers mixins."""
+            if dtype is None:
+                dtype = next(self.parameters()).dtype
+            if device is None:
+                device = attention_mask.device
+
+            if attention_mask.dim() == 3:
+                extended_attention_mask = attention_mask[:, None, :, :]
+            elif attention_mask.dim() == 2:
+                if getattr(self.config, "is_decoder", False):
+                    from transformers.modeling_utils import ModuleUtilsMixin
+
+                    extended_attention_mask = ModuleUtilsMixin.create_extended_attention_mask_for_decoder(
+                        input_shape,
+                        attention_mask,
+                        device,
+                    )
+                else:
+                    extended_attention_mask = attention_mask[:, None, None, :]
+            else:
+                raise ValueError(
+                    "Wrong attention mask shape: "
+                    f"input_shape={input_shape}, attention_mask={attention_mask.shape}"
+                )
+
+            extended_attention_mask = extended_attention_mask.to(dtype=dtype)
+            return (1.0 - extended_attention_mask) * torch.finfo(dtype).min
+
         # Patch o cap class de tat ca instance EsmModel sau do deu co method nay.
         esm_cls = esm_core.__class__
-        if not hasattr(esm_cls, "get_head_mask"):
+        need_head_patch = not hasattr(esm_cls, "get_head_mask")
+        need_extended_patch = not hasattr(esm_cls, "get_extended_attention_mask")
+        if need_head_patch:
             setattr(esm_cls, "get_head_mask", _compat_get_head_mask)
+        if need_extended_patch:
+            setattr(esm_cls, "get_extended_attention_mask", _compat_get_extended_attention_mask)
 
         # Gan them vao instance hien tai de dam bao hieu luc ngay lap tuc.
-        esm_core.get_head_mask = types.MethodType(_compat_get_head_mask, esm_core)
-        print("[!] Da patch get_head_mask cho remote EsmModel (class + instance).")
+        if not hasattr(esm_core, "get_head_mask"):
+            esm_core.get_head_mask = types.MethodType(_compat_get_head_mask, esm_core)
+        if not hasattr(esm_core, "get_extended_attention_mask"):
+            esm_core.get_extended_attention_mask = types.MethodType(
+                _compat_get_extended_attention_mask,
+                esm_core,
+            )
+
+        patched = []
+        if need_head_patch:
+            patched.append("get_head_mask")
+        if need_extended_patch:
+            patched.append("get_extended_attention_mask")
+        print(
+            "[!] Da patch compatibility cho remote EsmModel: "
+            f"{', '.join(patched) if patched else 'instance methods da san sang'}."
+        )
         return True
     except Exception:
         return False

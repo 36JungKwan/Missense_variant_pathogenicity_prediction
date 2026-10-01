@@ -53,7 +53,8 @@ class FusionEvaluatorProfiler:
     # =========================================================================
     # 1. TÍNH TOÁN 8 CHỈ SỐ PHÂN LOẠI (AN TOÀN TUYỆT ĐỐI)
     # =========================================================================
-    def compute_metrics(self, y_true: np.ndarray, y_probs: np.ndarray, y_preds: np.ndarray) -> dict:
+    @staticmethod
+    def compute_metrics(y_true: np.ndarray, y_probs: np.ndarray, y_preds: np.ndarray) -> dict:
         # [BẢN VÁ 1] Ép kiểu an toàn (Integer Casting) để Scikit-Learn không văng lỗi Type Mismatch
         y_true_int = np.asarray(y_true, dtype=int)
         y_preds_int = np.asarray(y_preds, dtype=int)

@@ -17,6 +17,21 @@ SPLICEAI_COLUMNS = [
     "SpliceAI_pred_DP_DG", "SpliceAI_pred_DP_DL", "SpliceAI_pred_DS_max",
 ]
 
+GEOM_SOURCE_COLUMNS = ["LLR", "LVD_L2", "LVD_Cosine", "LID"]
+GEOM_FEATURE_COLUMNS = [
+    *(f"dna_{col}" for col in GEOM_SOURCE_COLUMNS),
+    *(f"prot_{col}" for col in GEOM_SOURCE_COLUMNS),
+]
+GEOM_V2_SOURCE_COLUMNS = [*GEOM_SOURCE_COLUMNS, "LVD_Relative"]
+GEOM_V2_FEATURE_COLUMNS = [
+    *(f"dna_{col}" for col in GEOM_V2_SOURCE_COLUMNS),
+    *(f"prot_{col}" for col in GEOM_V2_SOURCE_COLUMNS),
+]
+ALL_GEOM_FEATURE_COLUMNS = [
+    *GEOM_FEATURE_COLUMNS,
+    *[name for name in GEOM_V2_FEATURE_COLUMNS if name not in GEOM_FEATURE_COLUMNS],
+]
+
 
 class VariantFusionDataset(Dataset):
     """
@@ -33,6 +48,7 @@ class VariantFusionDataset(Dataset):
                  dna_pt_path: str = None, 
                  prot_pt_path: str = None, 
                  active_modalities: list = None,
+                 geom_feature_names: list = None,
                  is_train: bool = True):
         
         self.is_train = is_train
@@ -50,6 +66,17 @@ class VariantFusionDataset(Dataset):
         self.has_bio = self.has_bio_core or self.has_spliceai
         self.has_geom = 'geom' in self.active_mods
 
+        self.geom_feature_names = (
+            list(geom_feature_names)
+            if geom_feature_names is not None
+            else list(GEOM_FEATURE_COLUMNS)
+        )
+        unknown_geom = [name for name in self.geom_feature_names if name not in ALL_GEOM_FEATURE_COLUMNS]
+        if unknown_geom:
+            raise ValueError(f"Geom feature khong hop le: {unknown_geom}")
+        if self.has_geom and len(self.geom_feature_names) == 0:
+            raise ValueError("Cau hinh geom phai co it nhat mot geom feature")
+
         # =====================================================================
         # 1. TẢI VÀ ĐỒNG BỘ DỮ LIỆU BẢNG (TABULAR DATA BACKBONE)
         # =====================================================================
@@ -58,19 +85,43 @@ class VariantFusionDataset(Dataset):
         
         self.geom_cols = []
         if self.has_geom:
-            if dna_geom_path:
+            selected_dna = [
+                name.removeprefix("dna_")
+                for name in self.geom_feature_names
+                if name.startswith("dna_")
+            ]
+            selected_prot = [
+                name.removeprefix("prot_")
+                for name in self.geom_feature_names
+                if name.startswith("prot_")
+            ]
+
+            if dna_geom_path and selected_dna:
                 df_dna_geom = pd.read_parquet(dna_geom_path)
-                dna_rename_dict = {col: f"dna_{col}" for col in ["LLR", "LVD_L2", "LVD_Cosine", "LID"]}
+                dna_rename_dict = {col: f"dna_{col}" for col in selected_dna}
+                missing_dna_geom = [col for col in selected_dna if col not in df_dna_geom.columns]
+                if missing_dna_geom:
+                    raise KeyError(f"Thieu DNA geom columns: {missing_dna_geom}")
                 df_dna_geom = df_dna_geom.rename(columns=dna_rename_dict)
                 self.df = self.df.merge(df_dna_geom, on="Variant_ID")
                 self.geom_cols.extend(dna_rename_dict.values())
                 
-            if prot_geom_path:
+            if prot_geom_path and selected_prot:
                 df_prot_geom = pd.read_parquet(prot_geom_path)
-                prot_rename_dict = {col: f"prot_{col}" for col in ["LLR", "LVD_L2", "LVD_Cosine", "LID"]}
+                prot_rename_dict = {col: f"prot_{col}" for col in selected_prot}
+                missing_prot_geom = [col for col in selected_prot if col not in df_prot_geom.columns]
+                if missing_prot_geom:
+                    raise KeyError(f"Thieu protein geom columns: {missing_prot_geom}")
                 df_prot_geom = df_prot_geom.rename(columns=prot_rename_dict)
                 self.df = self.df.merge(df_prot_geom, on="Variant_ID")
                 self.geom_cols.extend(prot_rename_dict.values())
+
+            missing_selected_geom = [col for col in self.geom_feature_names if col not in self.geom_cols]
+            if missing_selected_geom:
+                raise KeyError(
+                    "Khong nap duoc cac geom feature duoc chon: "
+                    f"{missing_selected_geom}"
+                )
         
         variant_ids = self.df["Variant_ID"].tolist()
         num_samples = len(self.df)

@@ -5,6 +5,11 @@ import joblib
 import warnings
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, QuantileTransformer
+from sklearn.preprocessing import RobustScaler
+
+
+GEOM_V2_COLUMNS = ["LLR", "LVD_L2", "LVD_Cosine", "LID", "LVD_Relative"]
+GEOM_V2_LOG_COLUMNS = ["LVD_L2", "LVD_Cosine", "LID", "LVD_Relative"]
 
 class AdvancedFeatureNormalizer:
     """
@@ -172,4 +177,50 @@ class AdvancedFeatureNormalizer:
         df_out[self.geom_lvd_cols] = lvd_scaler.transform(np.log10(df_out[self.geom_lvd_cols] + self.epsilon))
         df_out[self.geom_lid_cols] = lid_scaler.transform(df_out[self.geom_lid_cols])
         
+        return df_out
+
+    def fit_transform_geom_v2(self, df: pd.DataFrame, artifacts_dir: str, config_name: str) -> pd.DataFrame:
+        """Fit a batch-specific geometry normalizer without quantile clipping.
+
+        LID can be far outside the train range for out-of-distribution queries.
+        RobustScaler after log1p preserves that ordering instead of mapping all
+        such values to the same QuantileTransformer boundary.
+        """
+        df_out = df.copy()
+        df_out = self._coerce_numeric(df_out, GEOM_V2_COLUMNS)
+        fill_values = df_out[GEOM_V2_COLUMNS].median().fillna(0.0)
+        df_out[GEOM_V2_COLUMNS] = df_out[GEOM_V2_COLUMNS].fillna(fill_values)
+
+        scalers = {}
+        for column in GEOM_V2_COLUMNS:
+            values = df_out[[column]].to_numpy(dtype=np.float64)
+            if column in GEOM_V2_LOG_COLUMNS:
+                values = np.log1p(np.clip(values, a_min=0.0, a_max=None))
+                scaler = RobustScaler(quantile_range=(5.0, 95.0))
+            else:
+                scaler = StandardScaler()
+            df_out[column] = scaler.fit_transform(values).ravel()
+            scalers[column] = scaler
+
+        os.makedirs(artifacts_dir, exist_ok=True)
+        joblib.dump(
+            {"fill_values": fill_values, "scalers": scalers},
+            f"{artifacts_dir}/{config_name}_geom_v2_scalers.pkl",
+        )
+        return df_out
+
+    def transform_geom_v2(self, df: pd.DataFrame, artifacts_dir: str, config_name: str) -> pd.DataFrame:
+        """Transform validation/test geometry with train-only V2 artifacts."""
+        df_out = df.copy()
+        df_out = self._coerce_numeric(df_out, GEOM_V2_COLUMNS)
+        artifacts = joblib.load(f"{artifacts_dir}/{config_name}_geom_v2_scalers.pkl")
+        fill_values = artifacts["fill_values"]
+        scalers = artifacts["scalers"]
+        df_out[GEOM_V2_COLUMNS] = df_out[GEOM_V2_COLUMNS].fillna(fill_values)
+
+        for column in GEOM_V2_COLUMNS:
+            values = df_out[[column]].to_numpy(dtype=np.float64)
+            if column in GEOM_V2_LOG_COLUMNS:
+                values = np.log1p(np.clip(values, a_min=0.0, a_max=None))
+            df_out[column] = scalers[column].transform(values).ravel()
         return df_out

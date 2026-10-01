@@ -3,6 +3,7 @@ import gc
 import random
 import importlib
 import shutil
+from itertools import combinations
 from datetime import datetime
 
 import numpy as np
@@ -12,7 +13,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from core.module05_fusion_classifier.dataset import VariantFusionDataset
+from core.module05_fusion_classifier.dataset import (
+    VariantFusionDataset,
+    GEOM_FEATURE_COLUMNS,
+    GEOM_V2_FEATURE_COLUMNS,
+)
 from core.module05_fusion_classifier.fusion_model import MultiStrategyFusionModel
 from core.module05_fusion_classifier.xgboost_model import XGBoostFusionManager
 from core.module05_fusion_classifier.evaluator_profiler import FusionEvaluatorProfiler
@@ -51,10 +56,14 @@ def _resolve_bio_path(processed_dir: str, split_name: str) -> str:
 
 def _resolve_geom_path(geometry_dir: str, split_name: str, model_name: str, pooling: str) -> str:
     candidates = [
+        f"{geometry_dir}/{split_name}/{model_name}_{pooling}_geom_v2_norm.parquet",
         f"{geometry_dir}/{split_name}/{model_name}_{pooling}_geom_norm.parquet",
+        f"{geometry_dir}/{split_name}/{model_name}_{pooling}_geom_v2.parquet",
         f"{geometry_dir}/{split_name}/{model_name}_{pooling}_geom.parquet",
         # Backward-compatible fallback for older geometry naming.
+        f"{geometry_dir}/{split_name}/{model_name}_geom_v2_norm.parquet",
         f"{geometry_dir}/{split_name}/{model_name}_geom_norm.parquet",
+        f"{geometry_dir}/{split_name}/{model_name}_geom_v2.parquet",
         f"{geometry_dir}/{split_name}/{model_name}_geom.parquet",
     ]
     for p in candidates:
@@ -138,7 +147,10 @@ class FusionBatchPipeline:
         explainability: dict | None = None,
         fm_profile_json: str = "D:/variant_data/profiling/fm_profiling.json",
         geom_profile_json: str | None = None,
+        geometry_dir: str | None = None,
+        geom_feature_names: list | None = None,
         batch_run_dir: str | None = None,
+        embedding_dir: str | None = None,
     ):
         self.base_dir = base_dir
         if config is None or datasets is None or models_space is None or pooling_strategies is None or experiments is None:
@@ -164,8 +176,11 @@ class FusionBatchPipeline:
         self.geom_profile_json = geom_profile_json or f"{self.base_dir}/profiling/geom_profiling.json"
 
         self.bio_dir = f"{self.base_dir}/processed_parquet"
-        self.geom_dir = f"{self.base_dir}/geometry"
-        self.embed_dir = f"{self.base_dir}/fm_embeddings"
+        self.geom_dir = geometry_dir or f"{self.base_dir}/geometry"
+        self.geom_feature_names = geom_feature_names
+        # Allow isolated ablation runs to use a separate embedding namespace
+        # without changing the legacy batch-run layout.
+        self.embed_dir = embedding_dir or f"{self.base_dir}/fm_embeddings"
 
         if batch_run_dir:
             self.batch_run_dir = os.path.abspath(batch_run_dir)
@@ -199,7 +214,25 @@ class FusionBatchPipeline:
             return "None"
         return text
 
-    def _build_run_key(self, dataset_name, pooling, dna_name, prot_name, ablation_str, network_name):
+    @staticmethod
+    def _canonical_geom_features(value):
+        if value is None:
+            return "ALL"
+        if isinstance(value, (list, tuple)):
+            return "+".join(str(item) for item in value) if value else "ALL"
+        text = str(value).strip()
+        return text if text and text.lower() not in {"none", "nan", "null"} else "ALL"
+
+    def _build_run_key(
+        self,
+        dataset_name,
+        pooling,
+        dna_name,
+        prot_name,
+        ablation_str,
+        network_name,
+        geom_features=None,
+    ):
         values = [
             dataset_name,
             pooling,
@@ -207,6 +240,7 @@ class FusionBatchPipeline:
             prot_name,
             ablation_str,
             network_name,
+            self._canonical_geom_features(geom_features),
         ]
         return "_".join(self._canonical_key_value(value) for value in values)
 
@@ -229,6 +263,7 @@ class FusionBatchPipeline:
                         row["Prot_Model"],
                         row["Ablation"],
                         row["Network"],
+                        row.get("Geom_Features", "ALL"),
                     )
                     completed_by_pooling.setdefault(pooling, set()).add(key)
             else:
@@ -251,11 +286,22 @@ class FusionBatchPipeline:
         df_profiling = pd.DataFrame(global_profiling)
         df_profiling.to_csv(self.profiling_csv_path, index=False)
 
-    def _get_train_cache_ckpt_dir(self, dataset_cfg, pooling, ablation_str, dna_name, prot_name, exp_name):
+    def _get_train_cache_ckpt_dir(
+        self,
+        dataset_cfg,
+        pooling,
+        ablation_str,
+        dna_name,
+        prot_name,
+        exp_name,
+        geom_features=None,
+    ):
         train_val_tag = f"{dataset_cfg['train']}__{dataset_cfg['val']}"
+        geom_key = self._canonical_geom_features(geom_features)
+        geom_suffix = "" if geom_key == "ALL" else f"/geom_{geom_key}"
         return (
             f"{self.batch_run_dir}/_train_cache/{train_val_tag}/"
-            f"{pooling}/{ablation_str}/{dna_name}__{prot_name}/{exp_name}/checkpoints"
+            f"{pooling}/{ablation_str}/{dna_name}__{prot_name}/{exp_name}{geom_suffix}/checkpoints"
         )
 
     def _feature_names(self, n_features: int, prefix: str):
@@ -476,14 +522,36 @@ class FusionBatchPipeline:
             del data
         return self.dim_cache[key]
 
-    def _get_dataloader(self, split_name, pooling, dna_name, prot_name, active_mods, is_train):
+    def _get_dataloader(
+        self,
+        split_name,
+        pooling,
+        dna_name,
+        prot_name,
+        active_mods,
+        is_train,
+        geom_feature_names=None,
+        geometry_context=None,
+    ):
+        geometry_active = "geom" in [str(mod).lower() for mod in active_mods]
+        selected_geom = set(geom_feature_names or self.geom_feature_names or GEOM_FEATURE_COLUMNS)
+        use_dna_geom = geometry_active and any(name.startswith("dna_") for name in selected_geom)
+        use_prot_geom = geometry_active and any(name.startswith("prot_") for name in selected_geom)
+        geometry_dir = self.geom_dir
+        if "{context}" in geometry_dir:
+            if geometry_context is None:
+                raise ValueError("geometry_dir co {context} nhung chua truyen geometry_context")
+            geometry_dir = geometry_dir.replace("{context}", str(geometry_context))
         dataset = VariantFusionDataset(
             bio_parquet_path=_resolve_bio_path(self.bio_dir, split_name),
-            dna_geom_path=_resolve_geom_path(self.geom_dir, split_name, dna_name, pooling) if dna_name != "None" else None,
-            prot_geom_path=_resolve_geom_path(self.geom_dir, split_name, prot_name, pooling) if prot_name != "None" else None,
+            dna_geom_path=_resolve_geom_path(geometry_dir, split_name, dna_name, pooling)
+            if dna_name != "None" and use_dna_geom else None,
+            prot_geom_path=_resolve_geom_path(geometry_dir, split_name, prot_name, pooling)
+            if prot_name != "None" and use_prot_geom else None,
             dna_pt_path=_resolve_pt_path(self.embed_dir, split_name, dna_name, pooling) if dna_name != "None" else None,
             prot_pt_path=_resolve_pt_path(self.embed_dir, split_name, prot_name, pooling) if prot_name != "None" else None,
             active_modalities=active_mods,
+            geom_feature_names=geom_feature_names or self.geom_feature_names,
             is_train=is_train,
         )
         return DataLoader(
@@ -494,11 +562,51 @@ class FusionBatchPipeline:
             pin_memory=(self.device.type == "cuda"),
         )
 
-    def _run_group(self, dna_cfg, prot_cfg, pooling, active_mods, dataset_cfg, completed_keys, g_metrics, g_prof, experiments_subset=None):
+    def _evaluate_pytorch_loader(self, model, dataloader, profiler):
+        """Evaluate a loaded checkpoint on a loader without affecting profiling."""
+        model.eval()
+        all_probs, all_preds, all_labels = [], [], []
+        with torch.no_grad():
+            for batch in dataloader:
+                logits = model(
+                    _safe_tensor(batch, "v_dna", self.device),
+                    _safe_tensor(batch, "v_prot", self.device),
+                    _safe_tensor(batch, "bio_features", self.device),
+                    _safe_tensor(batch, "geom_features", self.device),
+                )
+                probs = torch.sigmoid(logits)
+                all_probs.append(probs.cpu())
+                all_preds.append((probs > 0.5).float().cpu())
+                all_labels.append(batch["label"].cpu())
+
+        y_probs = torch.cat(all_probs).squeeze(-1).numpy()
+        y_preds = torch.cat(all_preds).squeeze(-1).numpy()
+        y_true = torch.cat(all_labels).squeeze(-1).numpy()
+        return profiler.compute_metrics(y_true, y_probs, y_preds)
+
+    def _run_group(
+        self,
+        dna_cfg,
+        prot_cfg,
+        pooling,
+        active_mods,
+        dataset_cfg,
+        completed_keys,
+        g_metrics,
+        g_prof,
+        experiments_subset=None,
+        geom_feature_names=None,
+        ablation_label=None,
+        run_explainability=None,
+    ):
         # Keep model names for geometry file resolution even when DNA/Prot are not active modalities.
         dna_name = dna_cfg["name"] if dna_cfg else "None"
         prot_name = prot_cfg["name"] if prot_cfg else "None"
-        ablation_str = "_".join(sorted(active_mods))
+        ablation_str = ablation_label or "_".join(sorted(active_mods))
+        effective_geom_feature_names = geom_feature_names
+        if "geom" in active_mods and effective_geom_feature_names is None:
+            effective_geom_feature_names = self.geom_feature_names
+        geom_feature_key = self._canonical_geom_features(effective_geom_feature_names)
         num_seq = int("dna" in active_mods) + int("prot" in active_mods)
 
         exp_candidates = experiments_subset if experiments_subset is not None else self.experiments
@@ -514,6 +622,7 @@ class FusionBatchPipeline:
                 prot_name,
                 ablation_str,
                 exp["name"],
+                geom_feature_key,
             )
             if run_key not in completed_keys:
                 tasks_to_run.append((exp, run_key))
@@ -521,12 +630,26 @@ class FusionBatchPipeline:
         if not tasks_to_run:
             return
 
+        explainability_enabled = (
+            self.explainability.get("enable_shap", False)
+            or self.explainability.get("enable_lime", False)
+        ) if run_explainability is None else bool(run_explainability)
+
         dna_dim = self._get_cached_dim(dna_name, dataset_cfg["train"], pooling) if "dna" in active_mods else 0
         prot_dim = self._get_cached_dim(prot_name, dataset_cfg["train"], pooling) if "prot" in active_mods else 0
 
-        train_loader = self._get_dataloader(dataset_cfg["train"], pooling, dna_name, prot_name, active_mods, True)
-        val_loader = self._get_dataloader(dataset_cfg["val"], pooling, dna_name, prot_name, active_mods, False)
-        test_loader = self._get_dataloader(dataset_cfg["test"], pooling, dna_name, prot_name, active_mods, False)
+        train_loader = self._get_dataloader(
+            dataset_cfg["train"], pooling, dna_name, prot_name, active_mods, True,
+            effective_geom_feature_names, dataset_cfg["train"]
+        )
+        val_loader = self._get_dataloader(
+            dataset_cfg["val"], pooling, dna_name, prot_name, active_mods, False,
+            effective_geom_feature_names, dataset_cfg["train"]
+        )
+        test_loader = self._get_dataloader(
+            dataset_cfg["test"], pooling, dna_name, prot_name, active_mods, False,
+            effective_geom_feature_names, dataset_cfg["train"]
+        )
         train_dataset = train_loader.dataset
         bio_dim = len(train_dataset.bio_cols) if train_dataset.has_bio else 0
         geom_dim = len(train_dataset.geom_cols) if train_dataset.has_geom else 0
@@ -534,7 +657,8 @@ class FusionBatchPipeline:
         for exp, run_key in tasks_to_run:
             completed_keys.add(run_key)
             config_tag = f"{dataset_cfg['train']}__{dataset_cfg['val']}"
-            exp_name = f"{config_tag}_{pooling}_{ablation_str}_{dna_name}_{prot_name}_{exp['name']}"
+            geom_exp_suffix = "" if geom_feature_key == "ALL" else f"__geom_{geom_feature_key}"
+            exp_name = f"{config_tag}_{pooling}_{ablation_str}_{dna_name}_{prot_name}_{exp['name']}{geom_exp_suffix}"
             print(f"[*] Running config={exp_name} | test={dataset_cfg['name']}")
 
             exp_dir = f"{self.batch_run_dir}/{exp_name}"
@@ -549,6 +673,7 @@ class FusionBatchPipeline:
                 dna_name,
                 prot_name,
                 exp["name"],
+                geom_feature_key,
             )
             os.makedirs(train_cache_ckpt_dir, exist_ok=True)
             shared_best_model_path = f"{train_cache_ckpt_dir}/best_model.pth"
@@ -578,7 +703,7 @@ class FusionBatchPipeline:
                 _safe_slice_dummy(dummy_batch, "geom_features", self.device),
             )
 
-            test_metrics, e2e_profiling = {}, {}
+            val_metrics, test_metrics, e2e_profiling = {}, {}, {}
             vids_t, y_true_t, y_probs_t, y_preds_t = [], [], [], []
 
             if exp["type"] == "pytorch":
@@ -686,6 +811,10 @@ class FusionBatchPipeline:
                 if not os.path.exists(best_model_path):
                     shutil.copy2(shared_best_model_path, best_model_path)
                 model.eval()
+
+                # Re-evaluate the selected checkpoint on validation so the
+                # leaderboard row contains the selection metric as well as test metrics.
+                val_metrics = self._evaluate_pytorch_loader(model, val_loader, profiler)
                 profiler.reset_memory_stats()
 
                 all_probs_t, all_preds_t, all_labels_t = [], [], []
@@ -753,6 +882,12 @@ class FusionBatchPipeline:
                     torch.save(model.state_dict(), shared_hybrid_feat_path)
 
                 profiler.add_xgboost_model_size(xgb_manager.model)
+                f_glob_vl, _, _, _, y_vl, _ = _extract_features_for_ml(
+                    model, val_loader, self.device, True
+                )
+                y_probs_v, y_preds_v, _ = xgb_manager.predict_hybrid(f_glob_vl)
+                val_metrics = profiler.compute_metrics(y_vl, y_probs_v, y_preds_v)
+                del f_glob_vl
                 profiler.reset_memory_stats()
                 profiler.tic_inference()
                 f_glob_ts, _, _, _, y_ts, vids_t = _extract_features_for_ml(model, test_loader, self.device, True)
@@ -761,7 +896,7 @@ class FusionBatchPipeline:
                 profiler.finalize_fusion_inference_profiling(len(test_loader.dataset))
                 y_true_t = y_ts
 
-                if self.explainability.get("enable_shap", False) or self.explainability.get("enable_lime", False):
+                if explainability_enabled:
                     if "f_glob_tr" not in locals() or f_glob_tr is None:
                         f_glob_tr, _, _, _, _, _ = _extract_features_for_ml(model, train_loader, self.device, True)
                 else:
@@ -780,14 +915,15 @@ class FusionBatchPipeline:
                     pooling=pooling,
                 )
 
-                self._run_xgb_explainability(
-                    exp_dir=test_out_dir,
-                    xgb_model=xgb_manager.model,
-                    x_train=f_glob_tr,
-                    x_test=f_glob_ts,
-                    variant_ids=vids_t,
-                    feature_prefix="f_global",
-                )
+                if explainability_enabled:
+                    self._run_xgb_explainability(
+                        exp_dir=test_out_dir,
+                        xgb_model=xgb_manager.model,
+                        x_train=f_glob_tr,
+                        x_test=f_glob_ts,
+                        variant_ids=vids_t,
+                        feature_prefix="f_global",
+                    )
 
                 del xgb_manager, f_glob_ts
 
@@ -814,6 +950,13 @@ class FusionBatchPipeline:
                     xgb_manager.save_model(train_cache_ckpt_dir, prefix="best_model")
                     del dna_tr_fit, prot_tr_fit, bg_tr_fit, y_tr_fit, dna_vl_fit, prot_vl_fit, bg_vl_fit, y_vl_fit
 
+                _, dna_vl, prot_vl, bg_vl, y_vl, _ = _extract_features_for_ml(
+                    model, val_loader, self.device, False
+                )
+                y_probs_v, y_preds_v, _ = xgb_manager.predict_pure(dna_vl, prot_vl, bg_vl)
+                val_metrics = profiler.compute_metrics(y_vl, y_probs_v, y_preds_v)
+                del dna_vl, prot_vl, bg_vl, y_vl
+
                 _, dna_ts, prot_ts, bg_ts, y_ts, vids_t = _extract_features_for_ml(model, test_loader, self.device, False)
 
                 profiler.add_xgboost_model_size(xgb_manager.model)
@@ -835,7 +978,7 @@ class FusionBatchPipeline:
 
                 xgb_manager.save_model(f"{exp_dir}/checkpoints", prefix="best_model")
 
-                if self.explainability.get("enable_shap", False) or self.explainability.get("enable_lime", False):
+                if explainability_enabled:
                     _, dna_tr_exp, prot_tr_exp, bg_tr_exp, _, _ = _extract_features_for_ml(model, train_loader, self.device, False)
                     v_dna_pca_tr, v_prot_pca_tr = xgb_manager.transform_pca(dna_tr_exp, prot_tr_exp)
                     x_train_pure = xgb_manager._build_pure_features(v_dna_pca_tr, v_prot_pca_tr, bg_tr_exp)
@@ -890,18 +1033,26 @@ class FusionBatchPipeline:
             )
             profiler.close()
 
-            g_metrics.append(
+            metric_row = {
+                "Dataset": dataset_cfg["name"],
+                "Pooling": pooling,
+                "Ablation": ablation_str,
+                "DNA_Model": dna_name,
+                "Prot_Model": prot_name,
+                "Network": exp["name"],
+                **test_metrics,
+                **{f"Val_{name}": value for name, value in val_metrics.items()},
+            }
+            if geom_feature_names is not None:
+                metric_row["Geom_Features"] = geom_feature_key
+            g_metrics.append(metric_row)
+            g_prof.append(
                 {
-                    "Dataset": dataset_cfg["name"],
-                    "Pooling": pooling,
-                    "Ablation": ablation_str,
-                    "DNA_Model": dna_name,
-                    "Prot_Model": prot_name,
-                    "Network": exp["name"],
-                    **test_metrics,
+                    "Experiment": f"{exp_name}__{dataset_cfg['name']}",
+                    "Geom_Features": geom_feature_key,
+                    **e2e_profiling,
                 }
             )
-            g_prof.append({"Experiment": f"{exp_name}__{dataset_cfg['name']}", **e2e_profiling})
 
             # Persist after each finished experiment so resume survives mid-run crashes.
             self._persist_global_outputs(g_metrics, g_prof)
@@ -912,6 +1063,185 @@ class FusionBatchPipeline:
 
         del train_loader, val_loader, test_loader
         gc.collect()
+
+    def run_geom_ablation(
+        self,
+        resume: bool = True,
+        dna_model_name: str = "nt_v2_500m",
+        prot_model_name: str = "esm1b_650m",
+        pooling: str = "mean",
+        experiment_name: str = "Pure_XGBoost_Concat",
+        run_explainability: bool = False,
+    ):
+        """Run all non-empty subsets of the configured geometry features.
+
+        This is intentionally isolated from ``run`` because the geometry
+        search has a fixed model/pooling/network matrix and should not rerun
+        the broader benchmark stages.
+        """
+        if pooling != "mean":
+            raise ValueError("Geom ablation hien tai chi ho tro pooling='mean'")
+
+        dna_cfg = next((m for m in self.dna_models if m["name"] == dna_model_name), None)
+        prot_cfg = next((m for m in self.prot_models if m["name"] == prot_model_name), None)
+        if dna_cfg is None:
+            raise ValueError(f"Khong tim thay DNA model trong MODELS_SPACE: {dna_model_name}")
+        if prot_cfg is None:
+            raise ValueError(f"Khong tim thay protein model trong MODELS_SPACE: {prot_model_name}")
+
+        experiment = next((e for e in self.experiments if e["name"] == experiment_name), None)
+        if experiment is None:
+            raise ValueError(f"Khong tim thay experiment trong EXPERIMENTS: {experiment_name}")
+        if experiment.get("type") != "xgboost_pure":
+            raise ValueError("Geom ablation hien tai phai dung experiment type='xgboost_pure'")
+
+        geom_search_space = list(self.geom_feature_names or GEOM_FEATURE_COLUMNS)
+        geom_subsets = [
+            list(subset)
+            for size in range(1, len(geom_search_space) + 1)
+            for subset in combinations(geom_search_space, size)
+        ]
+        expected_subsets = (2 ** len(geom_search_space)) - 1
+        if len(geom_subsets) != expected_subsets:
+            raise AssertionError(f"So geom subset khong dung: {len(geom_subsets)}")
+
+        if resume:
+            global_metrics, global_profiling, completed_by_pooling = self._load_resume_state()
+            print(
+                f"[*] Geom ablation resume: loaded metrics={len(global_metrics)} rows, "
+                f"profiling={len(global_profiling)} rows"
+            )
+        else:
+            global_metrics, global_profiling, completed_by_pooling = [], [], {}
+
+        self._persist_global_outputs(global_metrics, global_profiling)
+        completed_keys = set(completed_by_pooling.get(pooling, set()))
+        active_mods = ["dna", "prot", "bio_core", "spliceai", "geom"]
+        ablation_label = "bio_core_dna_prot_spliceai_geom"
+        dataset_groups = {}
+        for ds_cfg in self.datasets:
+            dataset_groups.setdefault((ds_cfg["train"], ds_cfg["val"]), []).append(ds_cfg)
+
+        expected_rows = len(geom_subsets) * len(self.datasets)
+        print(
+            f"[*] Geom ablation: {len(geom_subsets)} subsets | "
+            f"{len(self.datasets)} test datasets | expected rows={expected_rows}"
+        )
+
+        for index, geom_subset in enumerate(geom_subsets, start=1):
+            geom_key = self._canonical_geom_features(geom_subset)
+            print(f"\n[Geom {index:03d}/{len(geom_subsets)}] {geom_key}")
+            for _, group_ds_cfgs in dataset_groups.items():
+                for ds_cfg in group_ds_cfgs:
+                    self._run_group(
+                        dna_cfg,
+                        prot_cfg,
+                        pooling,
+                        active_mods,
+                        ds_cfg,
+                        completed_keys,
+                        global_metrics,
+                        global_profiling,
+                        experiments_subset=[experiment],
+                        geom_feature_names=geom_subset,
+                        ablation_label=ablation_label,
+                        run_explainability=run_explainability,
+                    )
+
+        self._persist_global_outputs(global_metrics, global_profiling)
+        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
+        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
+        geom_rows = (
+            int((df_metrics["Ablation"] == ablation_label).sum())
+            if "Ablation" in df_metrics.columns
+            else 0
+        )
+        return {
+            "batch_run_dir": self.batch_run_dir,
+            "metrics_path": self.metrics_csv_path,
+            "profiling_path": self.profiling_csv_path,
+            "num_rows_metrics": int(len(df_metrics)),
+            "num_rows_profiling": int(len(df_profiling)),
+            "geom_ablation_rows": geom_rows,
+            "geom_subset_count": len(geom_subsets),
+            "expected_geom_rows": expected_rows,
+        }
+
+    def run_fixed_geometry_ablation(
+        self,
+        geometry_configs,
+        dna_model_name="nt_v2_500m",
+        prot_model_name="esm1b_650m",
+        pooling="mean",
+        experiment_names=None,
+        resume=True,
+        run_explainability=False,
+    ):
+        """Run a controlled geometry/architecture matrix.
+
+        Each item in ``geometry_configs`` must contain ``label`` and
+        ``features``. The label is part of the resume key, which lets the
+        same feature names be evaluated with different LID-k roots.
+        """
+        if pooling not in self.pooling_strategies:
+            raise ValueError(f"Pooling khong co trong pipeline: {pooling}")
+
+        dna_cfg = next((m for m in self.dna_models if m["name"] == dna_model_name), None)
+        prot_cfg = next((m for m in self.prot_models if m["name"] == prot_model_name), None)
+        if dna_cfg is None or prot_cfg is None:
+            raise ValueError("Khong tim thay DNA/Protein model cho geometry ablation")
+
+        selected_experiments = self.experiments
+        if experiment_names is not None:
+            wanted = set(experiment_names)
+            selected_experiments = [e for e in self.experiments if e["name"] in wanted]
+            missing = wanted - {e["name"] for e in selected_experiments}
+            if missing:
+                raise ValueError(f"Khong tim thay architecture: {sorted(missing)}")
+
+        if resume:
+            global_metrics, global_profiling, completed_by_pooling = self._load_resume_state()
+        else:
+            global_metrics, global_profiling, completed_by_pooling = [], [], {}
+        completed_keys = set(completed_by_pooling.get(pooling, set()))
+        active_mods = ["dna", "prot", "bio_core", "spliceai", "geom"]
+
+        for geom_cfg in geometry_configs:
+            label = str(geom_cfg["label"])
+            features = list(geom_cfg["features"])
+            if not features:
+                raise ValueError(f"Geometry config rong: {label}")
+            print(
+                f"\n[Geometry Matrix] {label} | features={'+'.join(features)} | "
+                f"architectures={len(selected_experiments)}"
+            )
+            for experiment in selected_experiments:
+                for dataset_cfg in self.datasets:
+                    self._run_group(
+                        dna_cfg,
+                        prot_cfg,
+                        pooling,
+                        active_mods,
+                        dataset_cfg,
+                        completed_keys,
+                        global_metrics,
+                        global_profiling,
+                        experiments_subset=[experiment],
+                        geom_feature_names=features,
+                        ablation_label=label,
+                        run_explainability=run_explainability,
+                    )
+
+        self._persist_global_outputs(global_metrics, global_profiling)
+        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
+        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
+        return {
+            "batch_run_dir": self.batch_run_dir,
+            "metrics_path": self.metrics_csv_path,
+            "profiling_path": self.profiling_csv_path,
+            "num_rows_metrics": int(len(df_metrics)),
+            "num_rows_profiling": int(len(df_profiling)),
+        }
 
     def run(self, resume: bool = False):
         set_seed(42)
@@ -1080,6 +1410,82 @@ class FusionBatchPipeline:
         df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
         df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
 
+        return {
+            "batch_run_dir": self.batch_run_dir,
+            "metrics_path": self.metrics_csv_path,
+            "profiling_path": self.profiling_csv_path,
+            "num_rows_metrics": int(len(df_metrics)),
+            "num_rows_profiling": int(len(df_profiling)),
+        }
+
+    def run_sequence_ablation(
+        self,
+        sequence_pairs: list[tuple[str, str]],
+        resume: bool = True,
+        experiment_name: str = "Pure_XGBoost_Concat",
+        pooling: str = "mean",
+        active_mods: list[str] | None = None,
+    ):
+        """Run a fixed-model sequence-length matrix.
+
+        ``sequence_pairs`` contains model names whose embedding files already
+        encode the DNA/protein sequence lengths.  This keeps the matrix at
+        exactly one experiment per pair instead of accidentally expanding into
+        the full model/pooling/architecture search.
+        """
+        set_seed(42)
+        if pooling not in self.pooling_strategies:
+            raise ValueError(f"Pooling khong co trong pipeline: {pooling}")
+
+        active_mods = active_mods or ["dna", "prot", "bio_core", "spliceai"]
+        experiment = next((e for e in self.experiments if e["name"] == experiment_name), None)
+        if experiment is None:
+            raise ValueError(f"Khong tim thay experiment: {experiment_name}")
+        if "geom" in active_mods:
+            raise ValueError("Sequence ablation nay phai chay khong co geometry.")
+
+        model_by_name = {model["name"]: model for model in self.models_space}
+        for dna_name, prot_name in sequence_pairs:
+            if dna_name not in model_by_name or model_by_name[dna_name]["seq_type"] != "dna":
+                raise ValueError(f"DNA sequence model khong hop le: {dna_name}")
+            if prot_name not in model_by_name or model_by_name[prot_name]["seq_type"] != "protein":
+                raise ValueError(f"Protein sequence model khong hop le: {prot_name}")
+
+        if resume:
+            global_metrics, global_profiling, completed_by_pooling = self._load_resume_state()
+        else:
+            global_metrics, global_profiling, completed_by_pooling = [], [], {}
+        self._persist_global_outputs(global_metrics, global_profiling)
+
+        dataset_groups = {}
+        for ds_cfg in self.datasets:
+            key = (ds_cfg["train"], ds_cfg["val"])
+            dataset_groups.setdefault(key, []).append(ds_cfg)
+
+        completed_keys = set(completed_by_pooling.get(pooling, set()))
+        dna_lookup = model_by_name
+        for dna_name, prot_name in sequence_pairs:
+            print(f"\n[SEQUENCE ABLATION] DNA={dna_name} | PROT={prot_name}")
+            for _, group_ds_cfgs in dataset_groups.items():
+                for ds_cfg in group_ds_cfgs:
+                    self._run_group(
+                        dna_lookup[dna_name],
+                        dna_lookup[prot_name],
+                        pooling,
+                        active_mods,
+                        ds_cfg,
+                        completed_keys,
+                        global_metrics,
+                        global_profiling,
+                        experiments_subset=[experiment],
+                        geom_feature_names=None,
+                        ablation_label="bio_core_dna_prot_spliceai",
+                        run_explainability=False,
+                    )
+
+        self._persist_global_outputs(global_metrics, global_profiling)
+        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
+        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
         return {
             "batch_run_dir": self.batch_run_dir,
             "metrics_path": self.metrics_csv_path,

@@ -99,6 +99,7 @@ class LatentGeometryCalculator:
     def __init__(self, k_neighbors: int = 32, epsilon: float = 1e-8):
         self.k_neighbors = k_neighbors
         self.epsilon = epsilon
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # FAISS tren mot so moi truong Windows chi co ban CPU (khong co StandardGpuResources).
         self.use_faiss_gpu = hasattr(faiss, "StandardGpuResources") and hasattr(faiss, "index_cpu_to_gpu")
@@ -114,8 +115,8 @@ class LatentGeometryCalculator:
         Tính toán Latent Variant Displacement (LVD) kép: L2 và Cosine[cite: 6].
         Thực thi hoàn toàn trên GPU bằng PyTorch để tối đa tốc độ.
         """
-        if not e_ref.is_cuda: e_ref = e_ref.cuda()
-        if not e_alt.is_cuda: e_alt = e_alt.cuda()
+        e_ref = e_ref.to(self.device)
+        e_alt = e_alt.to(self.device)
         
         e_ref = e_ref.to(torch.float32)
         e_alt = e_alt.to(torch.float32)
@@ -178,7 +179,7 @@ class LatentGeometryCalculator:
         if profiler is not None:
             profiler.toc("index_load_time_s")
 
-    def compute_lid(self, delta_queries: torch.Tensor):
+    def compute_lid(self, delta_queries: torch.Tensor, exclude_self: bool = False):
         """
         Tính toán Local Intrinsic Dimensionality (LID) bằng FAISS k-NN[cite: 6].
         """
@@ -189,7 +190,16 @@ class LatentGeometryCalculator:
             delta_queries.detach().cpu().numpy().astype(np.float32)
         )
         
-        D, I = self.index.search(delta_np, self.k_neighbors)
+        search_k = self.k_neighbors + 1 if exclude_self else self.k_neighbors
+        if search_k > self.index.ntotal:
+            raise ValueError(
+                f"FAISS index co {self.index.ntotal} vectors, can not query k={search_k}"
+            )
+        D, I = self.index.search(delta_np, search_k)
+        if exclude_self:
+            # For a train query the first result is the query itself (distance 0).
+            # Drop it so train LID is comparable with validation/test LID.
+            D = D[:, 1:]
         
         # r là khoảng cách thực tế (căn bậc hai của L2 squared distance)
         r = np.sqrt(np.maximum(D, 0))
@@ -208,9 +218,17 @@ class LatentGeometryCalculator:
         
         lid = - (self.k_neighbors / sum_log)
         
-        return torch.tensor(lid, dtype=torch.float16)
+        # LID can become large for low-density/OOD queries. Keep float32 so
+        # valid high-density scores do not overflow float16 before scaling.
+        return torch.from_numpy(lid.astype(np.float32, copy=False))
 
-    def extract_geometry_features(self, e_ref: torch.Tensor, e_alt: torch.Tensor, profiler: GeometryExtractionProfiler | None = None):
+    def extract_geometry_features(
+        self,
+        e_ref: torch.Tensor,
+        e_alt: torch.Tensor,
+        profiler: GeometryExtractionProfiler | None = None,
+        exclude_self: bool = False,
+    ):
         """
         Hàm Wrapper thực thi toàn bộ pipeline toán học của Module 3[cite: 6].
         Trả về Dictionary chứa các vector vô hướng.
@@ -225,7 +243,7 @@ class LatentGeometryCalculator:
         delta = e_alt - e_ref
         if profiler is not None:
             profiler.tic("lid_time_s")
-        lid = self.compute_lid(delta)
+        lid = self.compute_lid(delta, exclude_self=exclude_self)
         if profiler is not None:
             profiler.toc("lid_time_s")
             profiler.toc("geometry_total_time_s")
