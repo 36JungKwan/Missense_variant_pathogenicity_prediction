@@ -3,6 +3,7 @@ import gc
 import random
 import importlib
 import shutil
+import hashlib
 from itertools import combinations
 from datetime import datetime
 
@@ -32,6 +33,12 @@ def set_seed(seed: int = 42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     os.environ["PYTHONHASHSEED"] = str(seed)
+
+
+def _stable_seed(*parts, base_seed: int = 42) -> int:
+    """Derive a reproducible per-config seed without relying on Python hash()."""
+    payload = "||".join(str(part) for part in (base_seed, *parts)).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little") & 0x7FFFFFFF
 
 
 def _resolve_bio_path(processed_dir: str, split_name: str) -> str:
@@ -159,6 +166,8 @@ class FusionBatchPipeline:
             )
 
         self.config = config
+        self.seed = int(self.config.get("seed", 42))
+        self.xgb_n_jobs = int(self.config.get("xgb_n_jobs", 1))
         self.datasets = datasets
         self.models_space = models_space
         self.pooling_strategies = pooling_strategies
@@ -532,6 +541,7 @@ class FusionBatchPipeline:
         is_train,
         geom_feature_names=None,
         geometry_context=None,
+        loader_seed=None,
     ):
         geometry_active = "geom" in [str(mod).lower() for mod in active_mods]
         selected_geom = set(geom_feature_names or self.geom_feature_names or GEOM_FEATURE_COLUMNS)
@@ -554,12 +564,15 @@ class FusionBatchPipeline:
             geom_feature_names=geom_feature_names or self.geom_feature_names,
             is_train=is_train,
         )
+        generator = torch.Generator()
+        generator.manual_seed(self.seed if loader_seed is None else int(loader_seed))
         return DataLoader(
             dataset,
             batch_size=self.config["batch_size"],
             shuffle=is_train,
             num_workers=self.config["num_workers"],
             pin_memory=(self.device.type == "cuda"),
+            generator=generator,
         )
 
     def _evaluate_pytorch_loader(self, model, dataloader, profiler):
@@ -609,6 +622,17 @@ class FusionBatchPipeline:
         geom_feature_key = self._canonical_geom_features(effective_geom_feature_names)
         num_seq = int("dna" in active_mods) + int("prot" in active_mods)
 
+        config_seed = _stable_seed(
+            dataset_cfg["train"],
+            dataset_cfg["val"],
+            pooling,
+            dna_name,
+            prot_name,
+            ",".join(sorted(str(mod).lower() for mod in active_mods)),
+            geom_feature_key,
+            base_seed=self.seed,
+        )
+
         exp_candidates = experiments_subset if experiments_subset is not None else self.experiments
 
         tasks_to_run = []
@@ -648,7 +672,7 @@ class FusionBatchPipeline:
         )
         test_loader = self._get_dataloader(
             dataset_cfg["test"], pooling, dna_name, prot_name, active_mods, False,
-            effective_geom_feature_names, dataset_cfg["train"]
+            effective_geom_feature_names, dataset_cfg["train"], config_seed
         )
         train_dataset = train_loader.dataset
         bio_dim = len(train_dataset.bio_cols) if train_dataset.has_bio else 0
@@ -656,6 +680,10 @@ class FusionBatchPipeline:
 
         for exp, run_key in tasks_to_run:
             completed_keys.add(run_key)
+            exp_seed = _stable_seed(exp["name"], base_seed=config_seed)
+            set_seed(exp_seed)
+            if getattr(train_loader, "generator", None) is not None:
+                train_loader.generator.manual_seed(exp_seed)
             config_tag = f"{dataset_cfg['train']}__{dataset_cfg['val']}"
             geom_exp_suffix = "" if geom_feature_key == "ALL" else f"__geom_{geom_feature_key}"
             exp_name = f"{config_tag}_{pooling}_{ablation_str}_{dna_name}_{prot_name}_{exp['name']}{geom_exp_suffix}"
@@ -850,7 +878,10 @@ class FusionBatchPipeline:
 
             elif exp["type"] == "hybrid":
                 profiler.profile_pytorch_fusion(model, d_in_safe)
-                xgb_manager = XGBoostFusionManager()
+                xgb_manager = XGBoostFusionManager(
+                    random_state=self.seed,
+                    n_jobs=self.xgb_n_jobs,
+                )
                 f_glob_tr = None
                 if os.path.exists(shared_hybrid_feat_path) and os.path.exists(shared_xgb_json_path):
                     print("[*] Reuse trained Hybrid artifacts from shared train/val cache")
@@ -929,7 +960,10 @@ class FusionBatchPipeline:
 
             elif exp["type"] == "xgboost_pure":
                 profiler.profile_non_pytorch_fusion()
-                xgb_manager = XGBoostFusionManager()
+                xgb_manager = XGBoostFusionManager(
+                    random_state=self.seed,
+                    n_jobs=self.xgb_n_jobs,
+                )
 
                 if os.path.exists(shared_xgb_json_path):
                     print("[*] Reuse trained XGBoost-Pure artifacts from shared train/val cache")

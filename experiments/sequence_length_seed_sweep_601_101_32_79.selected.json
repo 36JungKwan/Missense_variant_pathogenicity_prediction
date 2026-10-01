@@ -1,0 +1,23 @@
+{
+  "selection_metric": "Val_MCC",
+  "selected_seed": 79,
+  "selected_row": {
+    "Seed": 79.0,
+    "Best_Iteration": 199.0,
+    "Val_MCC": 0.7675,
+    "Val_AUROC": 0.9692,
+    "Val_AUPRC": 0.8963,
+    "test_MCC": 0.7773,
+    "test_AUROC": 0.965,
+    "test_AUPRC": 0.9227,
+    "clinvarhq_MCC": 0.8558,
+    "clinvarhq_AUROC": 0.9865,
+    "clinvarhq_AUPRC": 0.9871,
+    "uniprot_MCC": 0.4343,
+    "uniprot_AUROC": 0.7759,
+    "uniprot_AUPRC": 0.7647,
+    "proteingym_MCC": 0.5792,
+    "proteingym_AUROC": 0.9039,
+    "proteingym_AUPRC": 0.8837
+  }
+}

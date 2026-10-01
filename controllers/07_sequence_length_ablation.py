@@ -272,6 +272,8 @@ def _run_training(batch_run_dir: Path, resume: bool) -> dict:
             "lr_patience": 3,
             "early_stop_patience": 6,
             "num_workers": 0,
+            "seed": 58,
+            "xgb_n_jobs": 1,
         },
         datasets=_dataset_configs(),
         models_space=models_space,

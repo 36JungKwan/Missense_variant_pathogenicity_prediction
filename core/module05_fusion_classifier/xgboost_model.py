@@ -14,9 +14,15 @@ class XGBoostFusionManager:
     - Ép chuẩn Shape 2D tự động.
     - Tối ưu API XGBoost 2.0+ (Không còn spam warning).
     """
-    def __init__(self, pca_components: int = 256, random_state: int = 42):
+    def __init__(
+        self,
+        pca_components: int = 256,
+        random_state: int = 42,
+        n_jobs: int = 1,
+    ):
         self.pca_components = pca_components
         self.random_state = random_state
+        self.n_jobs = n_jobs
         
         self.pca_dna = None
         self.pca_prot = None
@@ -31,7 +37,7 @@ class XGBoostFusionManager:
             'early_stopping_rounds': 20, 
             'tree_method': 'hist',
             'random_state': self.random_state,
-            'n_jobs': -1,
+            'n_jobs': self.n_jobs,
             'verbosity': 0
         }
         
@@ -118,14 +124,22 @@ class XGBoostFusionManager:
             v_dna_np = self._to_numpy(v_dna)
             actual_comp = min(self.pca_components, v_dna_np.shape[0], v_dna_np.shape[1])
             print(f"[*] PCA (DNA): Nén từ {v_dna_np.shape[1]}D xuống {actual_comp}D...")
-            self.pca_dna = PCA(n_components=actual_comp, random_state=self.random_state)
+            self.pca_dna = PCA(
+                n_components=actual_comp,
+                svd_solver="randomized",
+                random_state=self.random_state,
+            )
             v_dna_pca = self.pca_dna.fit_transform(v_dna_np)
             
         if v_prot is not None:
             v_prot_np = self._to_numpy(v_prot)
             actual_comp = min(self.pca_components, v_prot_np.shape[0], v_prot_np.shape[1])
             print(f"[*] PCA (Protein): Nén từ {v_prot_np.shape[1]}D xuống {actual_comp}D...")
-            self.pca_prot = PCA(n_components=actual_comp, random_state=self.random_state)
+            self.pca_prot = PCA(
+                n_components=actual_comp,
+                svd_solver="randomized",
+                random_state=self.random_state,
+            )
             v_prot_pca = self.pca_prot.fit_transform(v_prot_np)
             
         return v_dna_pca, v_prot_pca
