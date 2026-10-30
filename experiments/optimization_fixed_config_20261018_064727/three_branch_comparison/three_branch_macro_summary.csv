@@ -1,0 +1,7 @@
+Target_Config,Branch,Macro_MCC_4_tests,Macro_AUROC_4_tests,Macro_AUPRC_4_tests,Test_sets_won_by_MCC
+A_no_geometry,DL,0.68625,0.9119,0.89535,0.0
+A_no_geometry,Hybrid,0.6991999999999999,0.9156000000000001,0.8996,0.0
+A_no_geometry,ML,0.714475,0.920625,0.906625,4.0
+B_with_geometry,DL,0.69545,0.9149499999999999,0.897875,1.0
+B_with_geometry,Hybrid,0.6793083333333333,0.8397416666666667,0.74705,1.0
+B_with_geometry,ML,0.714975,0.919975,0.906425,2.0

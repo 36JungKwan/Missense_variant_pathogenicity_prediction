@@ -115,13 +115,14 @@ class FeatureExtractor:
         return self._pad_for_ntv3_if_needed(tokenized)
 
     def _pad_for_ntv3_if_needed(self, tokenized_outputs):
-        """Pad token length cho NTv3 de tranh loi lech kich thuoc trong down/up sampling blocks."""
+        """Pad token length theo downsampling factor ?? skip tensors kh?p chi?u."""
         if "ntv3" not in self.manager.model_id.lower():
             return tokenized_outputs
 
         input_ids = tokenized_outputs["input_ids"]
         seq_len = int(input_ids.shape[1])
-        multiple = 64
+        num_downsamples = int(getattr(self.model.config, "num_downsamples", 7))
+        multiple = 2 ** num_downsamples
         target_len = ((seq_len + multiple - 1) // multiple) * multiple
         if target_len == seq_len:
             if "attention_mask" not in tokenized_outputs:

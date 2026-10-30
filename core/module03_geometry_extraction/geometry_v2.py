@@ -18,6 +18,9 @@ from core.module04_geo_bio_context_normalization.normalizer import (
 @dataclass
 class GeometryV2Config:
     base_dir: str = "D:/variant_data"
+    # Optional embedding namespace (for example, sequence_ablation). Defaults
+    # to the original ``{base_dir}/fm_embeddings`` layout for compatibility.
+    embedding_dir: str | None = None
     contexts: list[str] = field(default_factory=lambda: ["train1", "train2", "train3"])
     splits: list[str] = field(
         default_factory=lambda: ["train1", "train2", "train3", "val", "test", "clinvarhq", "uniprot", "proteingym"]
@@ -38,8 +41,9 @@ class GeometryV2Config:
     normalization_root: str = "normalization_artifacts_v2"
 
 
-def _embedding_path(base_dir, split, config_id):
-    return f"{base_dir}/fm_embeddings/{split}/{config_id}.pt"
+def _embedding_path(base_dir, split, config_id, embedding_dir=None):
+    root = embedding_dir or f"{base_dir}/fm_embeddings"
+    return f"{root}/{split}/{config_id}.pt"
 
 
 def _raw_output_path(base_dir, context, split, config_id, geometry_root="geometry_v2"):
@@ -99,7 +103,9 @@ def _build_context_index(config: GeometryV2Config, context: str, config_id: str)
         calculator.load_global_index(path)
         return calculator
 
-    embedding = _embedding_path(config.base_dir, context, config_id)
+    embedding = _embedding_path(
+        config.base_dir, context, config_id, config.embedding_dir
+    )
     if not os.path.exists(embedding):
         raise FileNotFoundError(f"Missing context embedding: {embedding}")
     data, _, _, _, delta = _load_delta(embedding)
@@ -138,7 +144,9 @@ def run_geometry_v2(config: GeometryV2Config | None = None):
                 raw_frames = {}
                 try:
                     for split in config.splits:
-                        embedding = _embedding_path(config.base_dir, split, config_id)
+                        embedding = _embedding_path(
+                            config.base_dir, split, config_id, config.embedding_dir
+                        )
                         raw_path = _raw_output_path(
                             config.base_dir, context, split, config_id, config.geometry_root
                         )

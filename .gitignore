@@ -7,3 +7,14 @@
 *checkpoints
 *tensorboard_logs
 *tests
+*.cbm
+*.sqlite3
+*.pkl
+*.npz
+# Generated text reports and metadata inside batch-run output folders only.
+/experiments/optimization_fixed_config_*/*.txt
+/experiments/optimization_fixed_config_*/**/*.txt
+/experiments/optimization_fixed_config_*/*.json
+/experiments/optimization_fixed_config_*/**/*.json
+/experiments/optimization_fixed_config_*/*.pdf
+/experiments/optimization_fixed_config_*/**/*.pdf

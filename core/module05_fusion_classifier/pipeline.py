@@ -1,4 +1,5 @@
 import os
+import json
 import gc
 import random
 import importlib
@@ -253,13 +254,23 @@ class FusionBatchPipeline:
         ]
         return "_".join(self._canonical_key_value(value) for value in values)
 
+    @staticmethod
+    def _read_csv_or_empty(path: str) -> pd.DataFrame:
+        """Read a CSV, treating missing/zero-byte files as an empty result table."""
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            return pd.DataFrame()
+        try:
+            return pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            return pd.DataFrame()
+
     def _load_resume_state(self):
         global_metrics = []
         global_profiling = []
         completed_by_pooling = {}
 
         if os.path.exists(self.metrics_csv_path):
-            df_metrics = pd.read_csv(self.metrics_csv_path)
+            df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
             req_cols = ["Dataset", "Pooling", "Ablation", "DNA_Model", "Prot_Model", "Network"]
             if all(col in df_metrics.columns for col in req_cols):
                 for row in df_metrics.to_dict(orient="records"):
@@ -281,18 +292,29 @@ class FusionBatchPipeline:
                 )
 
         if os.path.exists(self.profiling_csv_path):
-            df_profiling = pd.read_csv(self.profiling_csv_path)
+            df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
             global_profiling = df_profiling.to_dict(orient="records")
 
         return global_metrics, global_profiling, completed_by_pooling
 
     def _persist_global_outputs(self, global_metrics, global_profiling):
         df_metrics = pd.DataFrame(global_metrics)
+        if df_metrics.empty and len(df_metrics.columns) == 0:
+            metric_columns = [
+                "Dataset", "Pooling", "Ablation", "DNA_Model", "Prot_Model", "Network",
+                "Decision_Threshold", "Accuracy", "Precision", "Recall", "Specificity",
+                "F1_Score", "MCC", "AUROC", "AUPRC", "Val_Accuracy", "Val_Precision",
+                "Val_Recall", "Val_Specificity", "Val_F1_Score", "Val_MCC", "Val_AUROC",
+                "Val_AUPRC",
+            ]
+            df_metrics = pd.DataFrame(columns=metric_columns)
         if not df_metrics.empty and "Dataset" in df_metrics.columns and "MCC" in df_metrics.columns:
             df_metrics = df_metrics.sort_values(by=["Dataset", "MCC"], ascending=[True, False])
         df_metrics.to_csv(self.metrics_csv_path, index=False)
 
         df_profiling = pd.DataFrame(global_profiling)
+        if df_profiling.empty and len(df_profiling.columns) == 0:
+            df_profiling = pd.DataFrame(columns=["Experiment", "Geom_Features"])
         df_profiling.to_csv(self.profiling_csv_path, index=False)
 
     def _get_train_cache_ckpt_dir(
@@ -357,35 +379,104 @@ class FusionBatchPipeline:
         names.extend(bg_names)
         return names
 
-    def _save_shap(self, save_dir: str, xgb_model, x_background: np.ndarray, x_explain: np.ndarray, variant_ids: list, feature_names: list):
+    @staticmethod
+    def _stratified_sample_indices(
+        labels, max_samples: int, rng, balance_classes: bool = False
+    ) -> np.ndarray:
+        labels = np.asarray(labels).reshape(-1)
+        if max_samples <= 0 or len(labels) == 0:
+            return np.array([], dtype=np.int64)
+        if len(labels) <= max_samples:
+            return np.arange(len(labels), dtype=np.int64)
+
+        classes, counts = np.unique(labels, return_counts=True)
+        if max_samples < len(classes):
+            return np.sort(rng.choice(len(labels), size=max_samples, replace=False))
+
+        if balance_classes:
+            target = np.full(len(classes), max_samples // len(classes), dtype=int)
+            target[: max_samples % len(classes)] += 1
+            quotas = np.minimum(target, counts)
+            exact = target.astype(float)
+        else:
+            exact = counts * (max_samples / len(labels))
+            quotas = np.floor(exact).astype(int)
+            quotas = np.maximum(quotas, 1)
+        while quotas.sum() > max_samples:
+            candidates = np.flatnonzero(quotas > 1)
+            if len(candidates) == 0:
+                break
+            remove_idx = candidates[np.argmin(exact[candidates] - quotas[candidates])]
+            quotas[remove_idx] -= 1
+        while quotas.sum() < max_samples:
+            candidates = np.flatnonzero(quotas < counts)
+            if len(candidates) == 0:
+                break
+            add_idx = candidates[np.argmax(exact[candidates] - quotas[candidates])]
+            quotas[add_idx] += 1
+
+        selected = []
+        for cls, quota in zip(classes, quotas):
+            candidates = np.flatnonzero(labels == cls)
+            selected.extend(rng.choice(candidates, size=int(quota), replace=False).tolist())
+        return np.sort(np.asarray(selected, dtype=np.int64))
+
+    @staticmethod
+    def _feature_group(feature_name: str) -> str:
+        name = str(feature_name).lower()
+        if name.startswith("dna_pca_"):
+            return "dna_pca_component"
+        if name.startswith("prot_pca_"):
+            return "protein_pca_component"
+        if name.startswith(("fusion_latent_", "f_global_")):
+            return "learned_fusion_latent"
+        return "bio_core_or_spliceai"
+
+    def _save_shap(
+        self,
+        save_dir: str,
+        xgb_model,
+        x_background: np.ndarray,
+        y_background: np.ndarray,
+        x_explain: np.ndarray,
+        y_true: np.ndarray,
+        y_probs: np.ndarray,
+        y_preds: np.ndarray,
+        variant_ids: list,
+        feature_names: list,
+        run_metadata: dict | None = None,
+    ):
         if not self.explainability.get("enable_shap", False):
             return
         try:
             shap = importlib.import_module("shap")
         except ImportError:
-            print("[SHAP] Chua cai shap, bo qua explainability SHAP")
+            print("[SHAP] Package 'shap' is missing; skipping SHAP.")
             return
 
         max_bg = int(self.explainability.get("max_background_samples", 512))
         max_ex = int(self.explainability.get("max_explain_samples", 200))
-        rnd = np.random.default_rng(int(self.explainability.get("random_state", 42)))
-
-        bg_idx = np.arange(x_background.shape[0])
-        if len(bg_idx) > max_bg:
-            bg_idx = rnd.choice(bg_idx, size=max_bg, replace=False)
-
-        ex_idx = np.arange(x_explain.shape[0])
-        if len(ex_idx) > max_ex:
-            ex_idx = rnd.choice(ex_idx, size=max_ex, replace=False)
+        seed = int(self.explainability.get("random_state", 42))
+        bg_rng = np.random.default_rng(seed)
+        ex_rng = np.random.default_rng(seed + 1)
+        bg_idx = self._stratified_sample_indices(y_background, max_bg, bg_rng)
+        ex_idx = self._stratified_sample_indices(
+            y_true, max_ex, ex_rng, balance_classes=True
+        )
+        if len(bg_idx) == 0 or len(ex_idx) == 0:
+            print("[SHAP] Empty stratified background or explanation sample; skipping SHAP.")
+            return
 
         x_bg = x_background[bg_idx]
         x_ex = x_explain[ex_idx]
+        y_ex = np.asarray(y_true)[ex_idx].astype(int)
+        probs_ex = np.asarray(y_probs)[ex_idx].astype(float)
+        preds_ex = np.asarray(y_preds)[ex_idx].astype(int)
         ex_vids = [variant_ids[i] for i in ex_idx.tolist()]
-
         if len(feature_names) != x_ex.shape[1]:
             print(
-                "[SHAP] So luong feature_names khong khop so cot input, bo qua SHAP: "
-                f"feature_names={len(feature_names)}, input_dim={x_ex.shape[1]}"
+                "[SHAP] Feature-name count does not match input columns; skipping: "
+                f"names={len(feature_names)}, columns={x_ex.shape[1]}"
             )
             return
 
@@ -397,113 +488,211 @@ class FusionBatchPipeline:
         try:
             explainer = shap.TreeExplainer(xgb_model, **explainer_kwargs)
         except Exception as exc:
-            print(
-                "[SHAP] Khong khoi tao duoc TreeExplainer voi background/interventional, "
-                f"fallback ve TreeExplainer mac dinh. Ly do: {exc}"
-            )
+            print(f"[SHAP] Interventional explainer failed; using default TreeExplainer: {exc}")
             explainer = shap.TreeExplainer(xgb_model)
 
         try:
             raw_shap_values = explainer.shap_values(x_ex, check_additivity=False)
         except TypeError:
             raw_shap_values = explainer.shap_values(x_ex)
-
         try:
             shap_values = self._select_positive_shap_values(
-                raw_shap_values,
-                n_samples=x_ex.shape[0],
-                n_features=x_ex.shape[1],
+                raw_shap_values, n_samples=x_ex.shape[0], n_features=x_ex.shape[1]
             )
         except ValueError as exc:
             print(str(exc))
             return
 
-        abs_mean = np.mean(np.abs(shap_values), axis=0)
-        df_global = pd.DataFrame({"feature": feature_names, "mean_abs_shap": abs_mean})
-        df_global = df_global.sort_values("mean_abs_shap", ascending=False)
-        df_global.to_csv(f"{save_dir}/shap_global_importance.csv", index=False)
+        expected = np.asarray(explainer.expected_value).reshape(-1)
+        base_value = float(expected[-1]) if len(expected) else float("nan")
+        feature_groups = [self._feature_group(name) for name in feature_names]
+        global_rows = []
+        for idx, name in enumerate(feature_names):
+            global_rows.append({
+                "feature": name,
+                "feature_group": feature_groups[idx],
+                "mean_abs_shap": float(np.mean(np.abs(shap_values[:, idx]))),
+                "explained_samples": int(len(ex_idx)),
+                "sampling": "class_balanced_stratified",
+            })
+        pd.DataFrame(global_rows).sort_values(
+            "mean_abs_shap", ascending=False
+        ).to_csv(f"{save_dir}/shap_global_importance.csv", index=False)
 
-        top_k = min(30, shap_values.shape[1])
+        class_global_rows = []
+        for cls, class_name in ((0, "Benign"), (1, "Pathogenic")):
+            class_mask = y_ex == cls
+            if not np.any(class_mask):
+                continue
+            for idx, name in enumerate(feature_names):
+                class_global_rows.append({
+                    "true_label": cls,
+                    "true_class": class_name,
+                    "feature": name,
+                    "feature_group": feature_groups[idx],
+                    "mean_abs_shap": float(np.mean(np.abs(shap_values[class_mask, idx]))),
+                    "explained_samples": int(class_mask.sum()),
+                })
+        pd.DataFrame(class_global_rows).to_csv(
+            f"{save_dir}/shap_global_importance_by_true_class.csv", index=False
+        )
+
+        top_k = min(int(self.explainability.get("shap_top_k", 30)), shap_values.shape[1])
         local_rows = []
         for r, vid in enumerate(ex_vids):
             local_idx = np.argsort(np.abs(shap_values[r]))[::-1][:top_k]
-            for rank, c in enumerate(local_idx.tolist(), start=1):
+            for rank, col in enumerate(local_idx.tolist(), start=1):
                 local_rows.append({
                     "Variant_ID": vid,
+                    "true_label": int(y_ex[r]),
+                    "true_class": "Pathogenic" if y_ex[r] == 1 else "Benign",
+                    "predicted_probability_pathogenic": float(probs_ex[r]),
+                    "predicted_label": int(preds_ex[r]),
+                    "predicted_class": "Pathogenic" if preds_ex[r] == 1 else "Benign",
+                    "explained_class": "Pathogenic",
+                    "base_value_raw_margin": base_value,
                     "rank": rank,
-                    "feature": feature_names[c],
-                    "shap_value": float(shap_values[r, c]),
-                    "abs_shap": float(abs(shap_values[r, c])),
+                    "feature": feature_names[col],
+                    "feature_group": feature_groups[col],
+                    "shap_value_raw_margin": float(shap_values[r, col]),
+                    "abs_shap_raw_margin": float(abs(shap_values[r, col])),
                 })
         pd.DataFrame(local_rows).to_csv(f"{save_dir}/shap_local_top_ranked.csv", index=False)
 
-        pd.DataFrame([{
-            "background_samples": int(x_bg.shape[0]),
-            "explained_samples": int(x_ex.shape[0]),
+        class_counts = {str(int(cls)): int((y_ex == cls).sum()) for cls in np.unique(y_ex)}
+        info = {
+            "background_samples": int(len(bg_idx)),
+            "background_class_counts": {str(int(cls)): int((np.asarray(y_background)[bg_idx] == cls).sum()) for cls in np.unique(np.asarray(y_background)[bg_idx])},
+            "explained_samples": int(len(ex_idx)),
+            "explained_true_class_counts": class_counts,
             "input_features": int(x_ex.shape[1]),
+            "feature_space": (run_metadata or {}).get("feature_space", "unspecified"),
+            "background_sampling": "stratified_by_training_label_prevalence",
+            "explanation_sampling": "class_balanced_stratified",
+            "random_state": seed,
             "feature_perturbation": explainer_kwargs["feature_perturbation"],
             "model_output": explainer_kwargs["model_output"],
-            "class_explained": "positive_pathogenic",
-        }]).to_csv(f"{save_dir}/shap_run_info.csv", index=False)
+            "explained_class": "Pathogenic (label 1)",
+            **(run_metadata or {}),
+        }
+        with open(f"{save_dir}/shap_run_info.json", "w", encoding="utf-8") as handle:
+            json.dump(info, handle, indent=2, default=str)
 
-    def _save_lime(self, save_dir: str, x_train: np.ndarray, x_explain: np.ndarray, variant_ids: list, feature_names: list, predict_proba_fn):
+    def _save_lime(
+        self,
+        save_dir: str,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_explain: np.ndarray,
+        y_true: np.ndarray,
+        y_probs: np.ndarray,
+        y_preds: np.ndarray,
+        variant_ids: list,
+        feature_names: list,
+        predict_proba_fn,
+        run_metadata: dict | None = None,
+    ):
         if not self.explainability.get("enable_lime", False):
             return
         try:
             LimeTabularExplainer = importlib.import_module("lime.lime_tabular").LimeTabularExplainer
         except ImportError:
-            print("[LIME] Chua cai lime, bo qua explainability LIME")
+            print("[LIME] Package 'lime' is missing; skipping LIME.")
             return
 
         max_ex = int(self.explainability.get("max_lime_samples", 20))
         n_feat = int(self.explainability.get("lime_num_features", 20))
         max_bg = int(self.explainability.get("max_background_samples", 512))
-        rnd = np.random.default_rng(int(self.explainability.get("random_state", 42)))
+        num_samples = int(self.explainability.get("lime_num_samples", 2000))
+        seed = int(self.explainability.get("random_state", 42))
+        bg_rng = np.random.default_rng(seed)
+        ex_rng = np.random.default_rng(seed + 2)
+        bg_idx = self._stratified_sample_indices(y_train, max_bg, bg_rng)
+        ex_idx = self._stratified_sample_indices(
+            y_true, max_ex, ex_rng, balance_classes=True
+        )
+        if len(bg_idx) == 0 or len(ex_idx) == 0:
+            print("[LIME] Empty stratified background or explanation sample; skipping LIME.")
+            return
 
-        bg_idx = np.arange(x_train.shape[0])
-        if len(bg_idx) > max_bg:
-            bg_idx = rnd.choice(bg_idx, size=max_bg, replace=False)
         x_bg = x_train[bg_idx]
-
-        ex_idx = np.arange(x_explain.shape[0])
-        if len(ex_idx) > max_ex:
-            ex_idx = rnd.choice(ex_idx, size=max_ex, replace=False)
-
         explainer = LimeTabularExplainer(
             training_data=x_bg,
             feature_names=feature_names,
             class_names=["Benign", "Pathogenic"],
             mode="classification",
             discretize_continuous=True,
+            random_state=seed,
         )
-
+        y_true_arr = np.asarray(y_true).astype(int)
+        y_prob_arr = np.asarray(y_probs).astype(float)
+        y_pred_arr = np.asarray(y_preds).astype(int)
         rows = []
         for i in ex_idx.tolist():
-            exp = explainer.explain_instance(x_explain[i], predict_proba_fn, num_features=n_feat)
-            for rank, (feat_expr, weight) in enumerate(exp.as_list(), start=1):
+            exp = explainer.explain_instance(
+                x_explain[i], predict_proba_fn, labels=(1,), num_features=n_feat,
+                num_samples=num_samples,
+            )
+            local_pred = getattr(exp, "local_pred", None)
+            local_pred_pathogenic = (
+                float(np.asarray(local_pred).reshape(-1)[-1])
+                if local_pred is not None and np.asarray(local_pred).size
+                else float("nan")
+            )
+            for rank, (feat_expr, weight) in enumerate(exp.as_list(label=1), start=1):
                 rows.append({
                     "Variant_ID": variant_ids[i],
+                    "true_label": int(y_true_arr[i]),
+                    "true_class": "Pathogenic" if y_true_arr[i] == 1 else "Benign",
+                    "predicted_probability_pathogenic": float(y_prob_arr[i]),
+                    "predicted_label": int(y_pred_arr[i]),
+                    "predicted_class": "Pathogenic" if y_pred_arr[i] == 1 else "Benign",
+                    "explained_class": "Pathogenic (label 1)",
+                    "lime_surrogate_r2": float(exp.score),
+                    "lime_local_prediction_pathogenic": local_pred_pathogenic,
+                    "lime_num_samples": num_samples,
                     "rank": rank,
                     "feature_rule": feat_expr,
-                    "weight": float(weight),
+                    "weight_for_pathogenic_probability": float(weight),
                 })
         pd.DataFrame(rows).to_csv(f"{save_dir}/lime_local_explanations.csv", index=False)
+        info = {
+            "background_samples": int(len(bg_idx)),
+            "background_class_counts": {str(int(cls)): int((np.asarray(y_train)[bg_idx] == cls).sum()) for cls in np.unique(np.asarray(y_train)[bg_idx])},
+            "explained_samples": int(len(ex_idx)),
+            "explained_true_class_counts": {str(int(cls)): int((y_true_arr[ex_idx] == cls).sum()) for cls in np.unique(y_true_arr[ex_idx])},
+            "feature_space": (run_metadata or {}).get("feature_space", "unspecified"),
+            "background_sampling": "stratified_by_training_label_prevalence",
+            "explanation_sampling": "class_balanced_stratified",
+            "random_state": seed,
+            "explained_class": "Pathogenic (label 1)",
+            "num_features_per_explanation": n_feat,
+            "num_samples_per_explanation": num_samples,
+            **(run_metadata or {}),
+        }
+        with open(f"{save_dir}/lime_run_info.json", "w", encoding="utf-8") as handle:
+            json.dump(info, handle, indent=2, default=str)
 
     def _run_xgb_explainability(
         self,
         exp_dir: str,
         xgb_model,
         x_train: np.ndarray,
+        y_train: np.ndarray,
         x_test: np.ndarray,
+        y_true: np.ndarray,
+        y_probs: np.ndarray,
+        y_preds: np.ndarray,
         variant_ids: list,
         feature_prefix: str,
         feature_names: list | None = None,
+        run_metadata: dict | None = None,
     ):
         if x_train is None or x_test is None or len(variant_ids) == 0:
             return
         if x_train.shape[1] != x_test.shape[1]:
             print(
-                "[Explainability] Train/test feature dimension khong khop, bo qua: "
+                "[Explainability] Train/test feature dimension mismatch; skipping: "
                 f"train={x_train.shape[1]}, test={x_test.shape[1]}"
             )
             return
@@ -513,12 +702,18 @@ class FusionBatchPipeline:
             feature_names = self._feature_names(x_test.shape[1], feature_prefix)
         if len(feature_names) != x_test.shape[1]:
             print(
-                "[Explainability] So luong feature_names khong khop input_dim, bo qua: "
-                f"feature_names={len(feature_names)}, input_dim={x_test.shape[1]}"
+                "[Explainability] Feature-name count does not match input columns; skipping: "
+                f"names={len(feature_names)}, input_dim={x_test.shape[1]}"
             )
             return
-        self._save_shap(explain_dir, xgb_model, x_train, x_test, variant_ids, feature_names)
-        self._save_lime(explain_dir, x_train, x_test, variant_ids, feature_names, xgb_model.predict_proba)
+        self._save_shap(
+            explain_dir, xgb_model, x_train, y_train, x_test, y_true, y_probs,
+            y_preds, variant_ids, feature_names, run_metadata,
+        )
+        self._save_lime(
+            explain_dir, x_train, y_train, x_test, y_true, y_probs, y_preds,
+            variant_ids, feature_names, xgb_model.predict_proba, run_metadata,
+        )
 
     def _get_cached_dim(self, model_name, split_name, pooling):
         if model_name == "None":
@@ -575,8 +770,65 @@ class FusionBatchPipeline:
             generator=generator,
         )
 
+    @staticmethod
+    def _select_validation_threshold(y_true, y_probs) -> tuple[float, float]:
+        """Choose validation threshold maximizing MCC in O(n log n); ties prefer 0.5."""
+        y_true = np.asarray(y_true, dtype=int).reshape(-1)
+        y_probs = np.nan_to_num(
+            np.asarray(y_probs, dtype=float).reshape(-1), nan=0.0, posinf=1.0, neginf=0.0
+        )
+        if len(y_true) != len(y_probs) or len(y_true) == 0:
+            raise ValueError("Validation labels/probabilities are empty or have different lengths.")
+        y_probs = np.clip(y_probs, 0.0, 1.0)
+        order = np.argsort(-y_probs, kind="mergesort")
+        sorted_probs = y_probs[order]
+        sorted_positive = y_true[order] == 1
+        cumulative_tp = np.concatenate(([0], np.cumsum(sorted_positive, dtype=np.int64)))
+        total_positive = int(sorted_positive.sum())
+        total_negative = len(y_true) - total_positive
+        candidates = np.unique(np.concatenate(([0.0, 0.5], sorted_probs, [np.nextafter(sorted_probs[0], np.inf)])))
+
+        best_threshold, best_mcc = 0.5, -float("inf")
+        for threshold in candidates:
+            predicted_positive = int(np.searchsorted(-sorted_probs, -threshold, side="right"))
+            tp = int(cumulative_tp[predicted_positive])
+            fp = predicted_positive - tp
+            fn = total_positive - tp
+            tn = total_negative - fp
+            denominator = np.sqrt(
+                (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+            )
+            score = float((tp * tn - fp * fn) / denominator) if denominator else 0.0
+            if score > best_mcc or (
+                np.isclose(score, best_mcc)
+                and abs(threshold - 0.5) < abs(best_threshold - 0.5)
+            ):
+                best_threshold, best_mcc = float(threshold), score
+        return best_threshold, best_mcc
+
+    @staticmethod
+    def _threshold_predictions(y_probs, threshold: float) -> np.ndarray:
+        probs = np.nan_to_num(
+            np.asarray(y_probs, dtype=float).reshape(-1), nan=0.0, posinf=1.0, neginf=0.0
+        )
+        return (probs >= float(threshold)).astype(int)
+
+    @staticmethod
+    def _save_decision_threshold(paths, threshold: float, val_mcc: float):
+        payload = {
+            "decision_threshold": float(threshold),
+            "selection_metric": "MCC",
+            "validation_mcc_at_threshold": float(val_mcc),
+            "prediction_rule": "positive if probability >= decision_threshold",
+        }
+        for path in paths:
+            if path:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, indent=2)
+
     def _evaluate_pytorch_loader(self, model, dataloader, profiler):
-        """Evaluate a loaded checkpoint on a loader without affecting profiling."""
+        """Collect selected-checkpoint probabilities/labels on validation."""
         model.eval()
         all_probs, all_preds, all_labels = [], [], []
         with torch.no_grad():
@@ -593,9 +845,8 @@ class FusionBatchPipeline:
                 all_labels.append(batch["label"].cpu())
 
         y_probs = torch.cat(all_probs).squeeze(-1).numpy()
-        y_preds = torch.cat(all_preds).squeeze(-1).numpy()
         y_true = torch.cat(all_labels).squeeze(-1).numpy()
-        return profiler.compute_metrics(y_true, y_probs, y_preds)
+        return y_true, y_probs
 
     def _run_group(
         self,
@@ -842,7 +1093,10 @@ class FusionBatchPipeline:
 
                 # Re-evaluate the selected checkpoint on validation so the
                 # leaderboard row contains the selection metric as well as test metrics.
-                val_metrics = self._evaluate_pytorch_loader(model, val_loader, profiler)
+                y_true_v, y_probs_v = self._evaluate_pytorch_loader(model, val_loader, profiler)
+                decision_threshold, val_mcc_at_threshold = self._select_validation_threshold(y_true_v, y_probs_v)
+                y_preds_v = self._threshold_predictions(y_probs_v, decision_threshold)
+                val_metrics = profiler.compute_metrics(y_true_v, y_probs_v, y_preds_v)
                 profiler.reset_memory_stats()
 
                 all_probs_t, all_preds_t, all_labels_t = [], [], []
@@ -864,8 +1118,8 @@ class FusionBatchPipeline:
 
                 profiler.finalize_fusion_inference_profiling(len(test_loader.dataset))
                 y_probs_t = torch.cat(all_probs_t).squeeze(-1).numpy()
-                y_preds_t = torch.cat(all_preds_t).squeeze(-1).numpy()
                 y_true_t = torch.cat(all_labels_t).squeeze(-1).numpy()
+                y_preds_t = self._threshold_predictions(y_probs_t, decision_threshold)
 
                 test_metrics = profiler.compute_metrics(y_true_t, y_probs_t, y_preds_t)
                 e2e_profiling = profiler.get_e2e_profiling(
@@ -883,6 +1137,7 @@ class FusionBatchPipeline:
                     n_jobs=self.xgb_n_jobs,
                 )
                 f_glob_tr = None
+                y_train_explain = None
                 if os.path.exists(shared_hybrid_feat_path) and os.path.exists(shared_xgb_json_path):
                     print("[*] Reuse trained Hybrid artifacts from shared train/val cache")
                     model.load_state_dict(torch.load(shared_hybrid_feat_path, weights_only=True))
@@ -906,6 +1161,7 @@ class FusionBatchPipeline:
                             optimizer.step()
 
                     f_glob_tr, _, _, _, y_tr, _ = _extract_features_for_ml(model, train_loader, self.device, True)
+                    y_train_explain = y_tr
                     f_glob_vl, _, _, _, y_vl, _ = _extract_features_for_ml(model, val_loader, self.device, True)
 
                     xgb_manager.train_hybrid(f_glob_tr, y_tr, f_glob_vl, y_vl)
@@ -917,6 +1173,8 @@ class FusionBatchPipeline:
                     model, val_loader, self.device, True
                 )
                 y_probs_v, y_preds_v, _ = xgb_manager.predict_hybrid(f_glob_vl)
+                decision_threshold, val_mcc_at_threshold = self._select_validation_threshold(y_vl, y_probs_v)
+                y_preds_v = self._threshold_predictions(y_probs_v, decision_threshold)
                 val_metrics = profiler.compute_metrics(y_vl, y_probs_v, y_preds_v)
                 del f_glob_vl
                 profiler.reset_memory_stats()
@@ -926,10 +1184,11 @@ class FusionBatchPipeline:
                 profiler.toc_inference()
                 profiler.finalize_fusion_inference_profiling(len(test_loader.dataset))
                 y_true_t = y_ts
+                y_preds_t = self._threshold_predictions(y_probs_t, decision_threshold)
 
                 if explainability_enabled:
-                    if "f_glob_tr" not in locals() or f_glob_tr is None:
-                        f_glob_tr, _, _, _, _, _ = _extract_features_for_ml(model, train_loader, self.device, True)
+                    if f_glob_tr is None:
+                        f_glob_tr, _, _, _, y_train_explain, _ = _extract_features_for_ml(model, train_loader, self.device, True)
                 else:
                     f_glob_tr = None
 
@@ -951,9 +1210,21 @@ class FusionBatchPipeline:
                         exp_dir=test_out_dir,
                         xgb_model=xgb_manager.model,
                         x_train=f_glob_tr,
+                        y_train=y_train_explain,
                         x_test=f_glob_ts,
+                        y_true=y_true_t,
+                        y_probs=y_probs_t,
+                        y_preds=y_preds_t,
                         variant_ids=vids_t,
-                        feature_prefix="f_global",
+                        feature_prefix="fusion_latent",
+                        run_metadata={
+                            "feature_space": "learned_fusion_latent",
+                            "dataset": dataset_cfg["name"],
+                            "network": exp["name"],
+                            "pooling": pooling,
+                            "dna_model": dna_name,
+                            "protein_model": prot_name,
+                        },
                     )
 
                 del xgb_manager, f_glob_ts
@@ -988,6 +1259,8 @@ class FusionBatchPipeline:
                     model, val_loader, self.device, False
                 )
                 y_probs_v, y_preds_v, _ = xgb_manager.predict_pure(dna_vl, prot_vl, bg_vl)
+                decision_threshold, val_mcc_at_threshold = self._select_validation_threshold(y_vl, y_probs_v)
+                y_preds_v = self._threshold_predictions(y_probs_v, decision_threshold)
                 val_metrics = profiler.compute_metrics(y_vl, y_probs_v, y_preds_v)
                 del dna_vl, prot_vl, bg_vl, y_vl
 
@@ -1001,6 +1274,7 @@ class FusionBatchPipeline:
                 profiler.finalize_fusion_inference_profiling(len(test_loader.dataset))
 
                 y_true_t = y_ts
+                y_preds_t = self._threshold_predictions(y_probs_t, decision_threshold)
                 test_metrics = profiler.compute_metrics(y_true_t, y_probs_t, y_preds_t)
                 e2e_profiling = profiler.get_e2e_profiling(
                     dna_name,
@@ -1013,7 +1287,7 @@ class FusionBatchPipeline:
                 xgb_manager.save_model(f"{exp_dir}/checkpoints", prefix="best_model")
 
                 if explainability_enabled:
-                    _, dna_tr_exp, prot_tr_exp, bg_tr_exp, _, _ = _extract_features_for_ml(model, train_loader, self.device, False)
+                    _, dna_tr_exp, prot_tr_exp, bg_tr_exp, y_train_explain, _ = _extract_features_for_ml(model, train_loader, self.device, False)
                     v_dna_pca_tr, v_prot_pca_tr = xgb_manager.transform_pca(dna_tr_exp, prot_tr_exp)
                     x_train_pure = xgb_manager._build_pure_features(v_dna_pca_tr, v_prot_pca_tr, bg_tr_exp)
                     v_dna_pca_ts, v_prot_pca_ts = xgb_manager.transform_pca(dna_ts, prot_ts)
@@ -1029,10 +1303,22 @@ class FusionBatchPipeline:
                         exp_dir=test_out_dir,
                         xgb_model=xgb_manager.model,
                         x_train=x_train_pure,
+                        y_train=y_train_explain,
                         x_test=x_test_pure,
+                        y_true=y_true_t,
+                        y_probs=y_probs_t,
+                        y_preds=y_preds_t,
                         variant_ids=vids_t,
                         feature_prefix="xgb_pure",
                         feature_names=pure_feature_names,
+                        run_metadata={
+                            "feature_space": "dna_protein_pca_plus_biological_features",
+                            "dataset": dataset_cfg["name"],
+                            "network": exp["name"],
+                            "pooling": pooling,
+                            "dna_model": dna_name,
+                            "protein_model": prot_name,
+                        },
                     )
 
                     del dna_tr_exp, prot_tr_exp, bg_tr_exp
@@ -1044,11 +1330,20 @@ class FusionBatchPipeline:
             else:
                 raise ValueError(f"Khong ho tro exp type: {exp['type']}")
 
+            self._save_decision_threshold(
+                [
+                    f"{train_cache_ckpt_dir}/decision_threshold.json",
+                    f"{exp_dir}/checkpoints/decision_threshold.json",
+                ],
+                decision_threshold,
+                val_mcc_at_threshold,
+            )
             pd.DataFrame(
                 {
                     "Variant_ID": vids_t,
                     "True_Label": y_true_t,
                     "Predicted_Probability": y_probs_t,
+                    "Decision_Threshold": decision_threshold,
                     "Prediction_Class": y_preds_t,
                 }
             ).to_csv(f"{test_out_dir}/test_probabilities.csv", index=False)
@@ -1074,6 +1369,7 @@ class FusionBatchPipeline:
                 "DNA_Model": dna_name,
                 "Prot_Model": prot_name,
                 "Network": exp["name"],
+                "Decision_Threshold": float(decision_threshold),
                 **test_metrics,
                 **{f"Val_{name}": value for name, value in val_metrics.items()},
             }
@@ -1183,8 +1479,8 @@ class FusionBatchPipeline:
                     )
 
         self._persist_global_outputs(global_metrics, global_profiling)
-        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
-        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
+        df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
+        df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
         geom_rows = (
             int((df_metrics["Ablation"] == ablation_label).sum())
             if "Ablation" in df_metrics.columns
@@ -1267,8 +1563,8 @@ class FusionBatchPipeline:
                     )
 
         self._persist_global_outputs(global_metrics, global_profiling)
-        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
-        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
+        df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
+        df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
         return {
             "batch_run_dir": self.batch_run_dir,
             "metrics_path": self.metrics_csv_path,
@@ -1441,8 +1737,8 @@ class FusionBatchPipeline:
 
         self._persist_global_outputs(global_metrics, global_profiling)
 
-        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
-        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
+        df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
+        df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
 
         return {
             "batch_run_dir": self.batch_run_dir,
@@ -1518,12 +1814,297 @@ class FusionBatchPipeline:
                     )
 
         self._persist_global_outputs(global_metrics, global_profiling)
-        df_metrics = pd.read_csv(self.metrics_csv_path) if os.path.exists(self.metrics_csv_path) else pd.DataFrame()
-        df_profiling = pd.read_csv(self.profiling_csv_path) if os.path.exists(self.profiling_csv_path) else pd.DataFrame()
+        df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
+        df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
         return {
             "batch_run_dir": self.batch_run_dir,
             "metrics_path": self.metrics_csv_path,
             "profiling_path": self.profiling_csv_path,
             "num_rows_metrics": int(len(df_metrics)),
             "num_rows_profiling": int(len(df_profiling)),
+        }
+
+    def run_factorial_sequence_ablation(
+        self,
+        sequence_pairs: list[tuple[str, str]],
+        resume: bool = True,
+        active_mods: list[str] | None = None,
+    ):
+        """Run every requested sequence pair, pooling and architecture.
+
+        Embeddings are expected to be precomputed and named with their sequence
+        length. Each train/validation configuration is fitted once, then its
+        checkpoint is reused for all test datasets sharing that train/val pair.
+        """
+        set_seed(self.seed)
+        active_mods = active_mods or ["dna", "prot", "bio_core", "spliceai"]
+        if "geom" in {str(mod).lower() for mod in active_mods}:
+            raise ValueError("Sequence-length ablation must not enable geometry.")
+        if not {"dna", "prot"}.issubset({str(mod).lower() for mod in active_mods}):
+            raise ValueError("Factorial sequence ablation requires both DNA and protein.")
+        if not self.pooling_strategies or not self.experiments:
+            raise ValueError("At least one pooling strategy and architecture are required.")
+
+        model_by_name = {model["name"]: model for model in self.models_space}
+        for dna_name, prot_name in sequence_pairs:
+            if dna_name not in model_by_name or model_by_name[dna_name]["seq_type"] != "dna":
+                raise ValueError(f"Invalid DNA sequence model: {dna_name}")
+            if prot_name not in model_by_name or model_by_name[prot_name]["seq_type"] != "protein":
+                raise ValueError(f"Invalid protein sequence model: {prot_name}")
+
+        if resume:
+            global_metrics, global_profiling, completed_by_pooling = self._load_resume_state()
+        else:
+            global_metrics, global_profiling, completed_by_pooling = [], [], {}
+        self._persist_global_outputs(global_metrics, global_profiling)
+
+        dataset_groups = {}
+        for ds_cfg in self.datasets:
+            dataset_groups.setdefault((ds_cfg["train"], ds_cfg["val"]), []).append(ds_cfg)
+
+        for pooling in self.pooling_strategies:
+            completed_keys = set(completed_by_pooling.get(pooling, set()))
+            print(f"\n{'=' * 80}\n[FACTORIAL] POOLING={pooling} | pairs={len(sequence_pairs)} | architectures={len(self.experiments)}\n{'=' * 80}")
+            for dna_name, prot_name in sequence_pairs:
+                for group_ds_cfgs in dataset_groups.values():
+                    for exp in self.experiments:
+                        for ds_cfg in group_ds_cfgs:
+                            self._run_group(
+                                model_by_name[dna_name],
+                                model_by_name[prot_name],
+                                pooling,
+                                active_mods,
+                                ds_cfg,
+                                completed_keys,
+                                global_metrics,
+                                global_profiling,
+                                experiments_subset=[exp],
+                                geom_feature_names=None,
+                                ablation_label="bio_core_dna_prot_spliceai",
+                                run_explainability=False,
+                            )
+            self._persist_global_outputs(global_metrics, global_profiling)
+
+        df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
+        df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
+        return {
+            "batch_run_dir": self.batch_run_dir,
+            "metrics_path": self.metrics_csv_path,
+            "profiling_path": self.profiling_csv_path,
+            "num_rows_metrics": int(len(df_metrics)),
+            "num_rows_profiling": int(len(df_profiling)),
+        }
+
+
+    def run_posthoc_explainability(
+        self,
+        metrics_path: str | None = None,
+        top_n: int = 10,
+        selection_metric: str = "Val_MCC",
+        dataset_names: list[str] | None = None,
+        networks: list[str] | None = None,
+    ) -> dict:
+        """Explain validation-selected trained XGBoost/Hybrid configs without retraining."""
+        if not (self.explainability.get("enable_shap", False) or self.explainability.get("enable_lime", False)):
+            raise ValueError("Enable SHAP and/or LIME in pipeline.explainability before post-hoc analysis.")
+        if top_n <= 0:
+            raise ValueError("top_n must be a positive number of unique configurations.")
+
+        metrics_path = metrics_path or self.metrics_csv_path
+        metrics = pd.read_csv(metrics_path)
+        config_columns = ["Pooling", "Ablation", "DNA_Model", "Prot_Model", "Network"]
+        required = set(config_columns + [selection_metric])
+        missing = sorted(required.difference(metrics.columns))
+        if missing:
+            raise ValueError(f"Metrics file missing columns required for selection: {missing}")
+
+        xgb_networks = {
+            exp["name"] for exp in self.experiments
+            if exp.get("type") in {"hybrid", "xgboost_pure"}
+        }
+        eligible = metrics.loc[
+            metrics["Ablation"].astype(str).eq("bio_core_dna_prot_spliceai")
+            & metrics["Network"].astype(str).isin(networks or xgb_networks)
+        ].copy()
+        eligible[selection_metric] = pd.to_numeric(eligible[selection_metric], errors="coerce")
+        eligible = eligible.dropna(subset=[selection_metric])
+        if eligible.empty:
+            raise ValueError("No trained XGBoost/Hybrid rows found for the requested feature config.")
+
+        ranked = (
+            eligible.sort_values(selection_metric, ascending=False)
+            .drop_duplicates(config_columns, keep="first")
+            .head(top_n)
+        )
+        selected_configs = ranked[config_columns].to_dict(orient="records")
+        selected_datasets = list(dict.fromkeys(dataset_names or [cfg["name"] for cfg in self.datasets]))
+        dataset_cfg_by_name = {cfg["name"]: cfg for cfg in self.datasets}
+        unknown_datasets = sorted(set(selected_datasets).difference(dataset_cfg_by_name))
+        if unknown_datasets:
+            raise ValueError(f"Unknown dataset names requested: {unknown_datasets}")
+
+        experiment_by_name = {exp["name"]: exp for exp in self.experiments}
+        results = []
+        for rank, selected in enumerate(selected_configs, start=1):
+            metric_match = eligible
+            for column in config_columns:
+                metric_match = metric_match.loc[metric_match[column].eq(selected[column])]
+            val_score = float(metric_match[selection_metric].iloc[0])
+            dna_name, prot_name = selected["DNA_Model"], selected["Prot_Model"]
+            pooling, network = selected["Pooling"], selected["Network"]
+            if network not in experiment_by_name:
+                raise ValueError(f"Network {network} is absent from configured experiments.")
+            exp = experiment_by_name[network]
+            dna_cfg = next((m for m in self.models_space if m["name"] == dna_name and m["seq_type"] == "dna"), None)
+            prot_cfg = next((m for m in self.models_space if m["name"] == prot_name and m["seq_type"] == "protein"), None)
+            if dna_cfg is None or prot_cfg is None:
+                raise ValueError(f"Models not found in MODELS_SPACE: {dna_name}, {prot_name}")
+
+            for dataset_name in selected_datasets:
+                dataset_cfg = dataset_cfg_by_name[dataset_name]
+                dna_dim = self._get_cached_dim(dna_name, dataset_cfg["train"], pooling)
+                prot_dim = self._get_cached_dim(prot_name, dataset_cfg["train"], pooling)
+                active_mods = ["dna", "prot", "bio_core", "spliceai"]
+                train_loader = self._get_dataloader(
+                    dataset_cfg["train"], pooling, dna_name, prot_name, active_mods,
+                    True, None, dataset_cfg["train"],
+                )
+                val_loader = self._get_dataloader(
+                    dataset_cfg["val"], pooling, dna_name, prot_name, active_mods,
+                    False, None, dataset_cfg["train"],
+                )
+                test_loader = self._get_dataloader(
+                    dataset_cfg["test"], pooling, dna_name, prot_name, active_mods,
+                    False, None, dataset_cfg["train"],
+                )
+                bio_dim = len(train_loader.dataset.bio_cols) if train_loader.dataset.has_bio else 0
+                model = MultiStrategyFusionModel(
+                    dna_in_dim=dna_dim,
+                    prot_in_dim=prot_dim,
+                    active_modalities=active_mods,
+                    bio_in_dim=bio_dim,
+                    geom_in_dim=0,
+                    fusion_strategy=exp["fusion"],
+                ).to(self.device)
+
+                cache_dir = self._get_train_cache_ckpt_dir(
+                    dataset_cfg, pooling, "bio_core_dna_prot_spliceai",
+                    dna_name, prot_name, network, None,
+                )
+                xgb_path = f"{cache_dir}/best_model_xgboost.json"
+                if not os.path.exists(xgb_path):
+                    raise FileNotFoundError(
+                        f"Trained XGBoost checkpoint is missing for {network}: {xgb_path}"
+                    )
+                xgb_manager = XGBoostFusionManager(
+                    random_state=self.seed, n_jobs=self.xgb_n_jobs,
+                )
+                xgb_manager.load_model(cache_dir, prefix="best_model")
+
+                feature_space = "dna_protein_pca_plus_biological_features"
+                if exp["type"] == "hybrid":
+                    hybrid_path = f"{cache_dir}/hybrid_feature_extractor.pth"
+                    if not os.path.exists(hybrid_path):
+                        raise FileNotFoundError(f"Trained hybrid feature checkpoint is missing: {hybrid_path}")
+                    model.load_state_dict(torch.load(hybrid_path, map_location=self.device, weights_only=True))
+                    x_train, _, _, _, y_train, _ = _extract_features_for_ml(
+                        model, train_loader, self.device, True
+                    )
+                    x_val, _, _, _, y_val, _ = _extract_features_for_ml(
+                        model, val_loader, self.device, True
+                    )
+                    x_test, _, _, _, y_true, variant_ids = _extract_features_for_ml(
+                        model, test_loader, self.device, True
+                    )
+                    y_val_probs, _, _ = xgb_manager.predict_hybrid(x_val)
+                    decision_threshold, val_mcc_at_threshold = self._select_validation_threshold(y_val, y_val_probs)
+                    y_probs, _, _ = xgb_manager.predict_hybrid(x_test)
+                    y_preds = self._threshold_predictions(y_probs, decision_threshold)
+                    del x_val, y_val_probs
+                    feature_names = self._feature_names(x_test.shape[1], "fusion_latent")
+                    feature_space = "learned_fusion_latent"
+                else:
+                    _, dna_train, prot_train, bg_train, y_train, _ = _extract_features_for_ml(
+                        model, train_loader, self.device, False
+                    )
+                    _, dna_val, prot_val, bg_val, y_val, _ = _extract_features_for_ml(
+                        model, val_loader, self.device, False
+                    )
+                    _, dna_test, prot_test, bg_test, y_true, variant_ids = _extract_features_for_ml(
+                        model, test_loader, self.device, False
+                    )
+                    val_probs, _, _ = xgb_manager.predict_pure(dna_val, prot_val, bg_val)
+                    decision_threshold, val_mcc_at_threshold = self._select_validation_threshold(y_val, val_probs)
+                    dna_train_pca, prot_train_pca = xgb_manager.transform_pca(dna_train, prot_train)
+                    x_train = xgb_manager._build_pure_features(dna_train_pca, prot_train_pca, bg_train)
+                    dna_test_pca, prot_test_pca = xgb_manager.transform_pca(dna_test, prot_test)
+                    x_test = xgb_manager._build_pure_features(dna_test_pca, prot_test_pca, bg_test)
+                    y_probs, _, _ = xgb_manager.predict_pure(
+                        dna_test, prot_test, bg_test, y_true
+                    )
+                    y_preds = self._threshold_predictions(y_probs, decision_threshold)
+                    feature_names = self._build_pure_feature_names(
+                        dna_dim=0 if dna_test_pca is None else dna_test_pca.shape[1],
+                        prot_dim=0 if prot_test_pca is None else prot_test_pca.shape[1],
+                        bg_dim=0 if bg_test is None else bg_test.shape[1],
+                        dataset=test_loader.dataset,
+                    )
+                    del dna_train, prot_train, bg_train, dna_val, prot_val, bg_val, dna_test, prot_test, bg_test
+                    del val_probs, dna_train_pca, prot_train_pca, dna_test_pca, prot_test_pca
+
+                exp_name = (
+                    f"{dataset_cfg['train']}__{dataset_cfg['val']}_{pooling}_"
+                    f"bio_core_dna_prot_spliceai_{dna_name}_{prot_name}_{network}"
+                )
+                test_out_dir = f"{self.batch_run_dir}/{exp_name}/tests/{dataset_name}"
+                run_metadata = {
+                    "selection_rank": rank,
+                    "selection_metric": selection_metric,
+                    "selection_value": val_score,
+                    "dataset": dataset_name,
+                    "network": network,
+                    "pooling": pooling,
+                    "dna_model": dna_name,
+                    "protein_model": prot_name,
+                    "feature_space": feature_space,
+                    "selected_by_validation_only": True,
+                    "decision_threshold": float(decision_threshold),
+                    "threshold_selection_metric": "validation MCC",
+                }
+                self._run_xgb_explainability(
+                    exp_dir=test_out_dir,
+                    xgb_model=xgb_manager.model,
+                    x_train=x_train,
+                    y_train=y_train,
+                    x_test=x_test,
+                    y_true=y_true,
+                    y_probs=y_probs,
+                    y_preds=y_preds,
+                    variant_ids=variant_ids,
+                    feature_prefix="fusion_latent" if exp["type"] == "hybrid" else "xgb_pure",
+                    feature_names=feature_names,
+                    run_metadata=run_metadata,
+                )
+                results.append({
+                    **selected,
+                    "Dataset": dataset_name,
+                    "selection_rank": rank,
+                    selection_metric: val_score,
+                    "Decision_Threshold": float(decision_threshold),
+                    "Validation_MCC_at_Threshold": float(val_mcc_at_threshold),
+                    "explainability_dir": f"{test_out_dir}/explainability",
+                    "explained_test_samples": len(variant_ids),
+                })
+                del model, xgb_manager, train_loader, val_loader, test_loader, x_train, x_test
+                gc.collect()
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+
+        summary_path = f"{self.batch_run_dir}/posthoc_explainability_summary.csv"
+        pd.DataFrame(results).to_csv(summary_path, index=False)
+        return {
+            "summary_path": summary_path,
+            "num_selected_configs": len(selected_configs),
+            "num_explained_dataset_runs": len(results),
+            "results": results,
         }

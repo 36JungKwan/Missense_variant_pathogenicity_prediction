@@ -32,6 +32,7 @@ DEFAULT_INPUTS = [
     Path(r"D:\variant_data\test_full_seq_after_vep_final.parquet"),
     Path(r"D:\variant_data\clinvarhq_full_seq_after_vep_final.parquet"),
     Path(r"D:\variant_data\uniprot_full_seq_after_vep_final.parquet"),
+    Path(r"D:\variant_data\uniprot_all_after_vep_final.parquet"),
     Path(r"D:\variant_data\proteingym_full_seq_after_vep_final.parquet"),
 ]
 
@@ -77,6 +78,7 @@ def main() -> None:
             "scores and positions retained from annotation with largest DS_max"
         ),
         "datasets": {},
+        "missing_inputs": [],
     }
     if args.report.is_file():
         try:
@@ -89,7 +91,9 @@ def main() -> None:
     for source in inputs:
         target = spliceai_output_path(source)
         if not source.is_file():
-            raise FileNotFoundError(f"Không tìm thấy input Parquet: {source}")
+            print(f"[SKIP] Chưa có input Parquet: {source}")
+            summary["missing_inputs"].append(str(source))
+            continue
         if target.exists() and not args.overwrite:
             print(f"[SKIP] Đã có output: {target}")
             continue

@@ -1,0 +1,13 @@
+Target_Config,Architecture,Variant,Profile,Candidate_Level,Hyperparameters,Dataset,Source,N_Seeds,Val_MCC,MCC,AUROC,AUPRC,Model_Label,Branch,Val_AUPRC,Ablation,Classifier,Feature_Set,Encoder_Trial,Network,Selected_Trial,Parameters,Fusion_Hyperparameters,Decision_Threshold,Confirmation_Seeds,MCC_Seed_STD,AUROC_Seed_STD,AUPRC_Seed_STD,DL_Fusion_Mean_Val_MCC,Rank_MCC_within_Test
+B_with_geometry,,,,baseline,,Train3Val_ClinVarHQ,XGBoost PCA baseline,1,0.8171,0.9023,0.9884,0.9879,XGBoost_PCA_Baseline,ML,0.9163,,,,,,,,,,,,,,,1
+B_with_geometry,,,,grid_best,,Train3Val_ClinVarHQ,LightGBM,1,0.8297908375134169,0.896,0.9891,0.9885,LightGBM_PCA_GridBest,ML,0.9235,,,,,,,,,,,,,,,2
+A_no_geometry,,,,baseline,,Train3Val_ClinVarHQ,XGBoost PCA baseline,1,0.8169,0.8943,0.9889,0.9883,XGBoost_PCA_Baseline,ML,0.918,,,,,,,,,,,,,,,3
+A_no_geometry,,,,grid_best,,Train3Val_ProteinGym,LightGBM,1,0.8322908174531041,0.6763,0.913,0.8998,LightGBM_NoPCA_GridBest,ML,0.9229,,,,,,,,,,,,,,,1
+B_with_geometry,,,,grid_best,,Train3Val_ProteinGym,LightGBM,1,0.8342288434916063,0.6733,0.9141,0.9016,LightGBM_NoPCA_GridBest,ML,0.9235,,,,,,,,,,,,,,,2
+A_no_geometry,,,,grid_best,,Train3Val_ProteinGym,XGBoost no PCA,1,0.8329,0.6593,0.9123,0.9013,XGBoost_NoPCA_GridBest,ML,0.9217,,,,,,,,,,,,,,,3
+B_with_geometry,,,,grid_best,,Train3Val_Test,LightGBM,1,0.8342288434916063,0.8347,0.9751,0.9457,LightGBM_NoPCA_GridBest,ML,0.9235,,,,,,,,,,,,,,,1
+A_no_geometry,,,,grid_best,,Train3Val_Test,LightGBM,1,0.8322908174531041,0.8343,0.9755,0.946,LightGBM_NoPCA_GridBest,ML,0.9229,,,,,,,,,,,,,,,2
+B_with_geometry,,,,grid_best,,Train3Val_Test,XGBoost no PCA,1,0.8343,0.8332,0.9746,0.9447,XGBoost_NoPCA_GridBest,ML,0.9233,,,,,,,,,,,,,,,3
+B_with_geometry,,,,grid_best,,Train3Val_UniProt,LightGBM,1,0.8342288434916063,0.532,0.8121,0.7984,LightGBM_NoPCA_GridBest,ML,0.9235,,,,,,,,,,,,,,,1
+A_no_geometry,,,,grid_best,,Train3Val_UniProt,LightGBM,1,0.8322908174531041,0.5109,0.8108,0.7996,LightGBM_NoPCA_GridBest,ML,0.9229,,,,,,,,,,,,,,,2
+A_no_geometry,,,,grid_best,,Train3Val_UniProt,LightGBM,1,0.8293609093019366,0.5049,0.8024,0.7926,LightGBM_PCA_GridBest,ML,0.921,,,,,,,,,,,,,,,3
