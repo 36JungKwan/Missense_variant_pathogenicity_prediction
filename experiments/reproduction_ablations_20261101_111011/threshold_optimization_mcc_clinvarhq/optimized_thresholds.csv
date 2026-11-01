@@ -1,0 +1,4 @@
+Train_Split,Fit_ID,Pooling,Ablation,DNA_Model,Prot_Model,Network,Optimized_On,Threshold,ClinVarHQ_Max_MCC,Candidate_Count,ClinVarHQ_N
+train1,722039a48c73c5ff,center,bio_core_dna_prot_spliceai_geom,nt_v1_500m_dna_1001,esm2_650m_prot_501,Pure_XGBoost_Concat,ClinVarHQ,0.39082244,0.8925472121836152,706,703
+train2,32766149cb5ca8b6,center,bio_core_dna_prot_spliceai_geom,nt_v1_500m_dna_1001,esm2_650m_prot_501,Pure_XGBoost_Concat,ClinVarHQ,0.36508343,0.8834976523697737,705,703
+train3,8fe6fb346f2a6fd5,center,bio_core_dna_prot_spliceai_geom,nt_v1_500m_dna_1001,esm2_650m_prot_501,Pure_XGBoost_Concat,ClinVarHQ,0.6016869,0.8986999511299975,706,703

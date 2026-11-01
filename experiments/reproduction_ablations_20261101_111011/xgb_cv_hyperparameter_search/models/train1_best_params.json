@@ -1,0 +1,37 @@
+{
+  "train_split": "train1",
+  "candidate": {
+    "name": "baseline",
+    "max_depth": 6,
+    "learning_rate": 0.1,
+    "n_estimators": 500,
+    "min_child_weight": 1,
+    "subsample": 1.0,
+    "colsample_bytree": 1.0,
+    "gamma": 0.0,
+    "reg_lambda": 1.0,
+    "weight_mode": "balanced"
+  },
+  "resolved_xgboost_params": {
+    "max_depth": 6,
+    "learning_rate": 0.1,
+    "n_estimators": 500,
+    "min_child_weight": 1,
+    "subsample": 1.0,
+    "colsample_bytree": 1.0,
+    "gamma": 0.0,
+    "reg_lambda": 1.0,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "random_state": 2,
+    "n_jobs": 8,
+    "verbosity": 0,
+    "scale_pos_weight": 3.220474669469939
+  },
+  "cv_folds": 3,
+  "cv_selection_metric": "mean MCC at threshold 0.5",
+  "threshold_source": "separate val split",
+  "threshold": 0.43931838870048523,
+  "validation_mcc": 0.8348947152819052
+}

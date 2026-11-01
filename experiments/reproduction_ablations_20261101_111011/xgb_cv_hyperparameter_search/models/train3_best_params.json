@@ -1,0 +1,37 @@
+{
+  "train_split": "train3",
+  "candidate": {
+    "name": "deep_small_eta",
+    "max_depth": 6,
+    "learning_rate": 0.03,
+    "n_estimators": 800,
+    "min_child_weight": 3,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "gamma": 0.05,
+    "reg_lambda": 3.0,
+    "weight_mode": "balanced"
+  },
+  "resolved_xgboost_params": {
+    "max_depth": 6,
+    "learning_rate": 0.03,
+    "n_estimators": 800,
+    "min_child_weight": 3,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "gamma": 0.05,
+    "reg_lambda": 3.0,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "tree_method": "hist",
+    "random_state": 2,
+    "n_jobs": 8,
+    "verbosity": 0,
+    "scale_pos_weight": 1.0
+  },
+  "cv_folds": 3,
+  "cv_selection_metric": "mean MCC at threshold 0.5",
+  "threshold_source": "separate val split",
+  "threshold": 0.6786954402923584,
+  "validation_mcc": 0.8206842042229179
+}
