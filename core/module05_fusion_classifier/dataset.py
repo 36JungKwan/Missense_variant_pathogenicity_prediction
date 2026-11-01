@@ -49,6 +49,7 @@ class VariantFusionDataset(Dataset):
                  prot_pt_path: str = None, 
                  active_modalities: list = None,
                  geom_feature_names: list = None,
+                 bio_feature_names: list = None,
                  is_train: bool = True):
         
         self.is_train = is_train
@@ -173,11 +174,26 @@ class VariantFusionDataset(Dataset):
         # 3. GOM NHÓM ĐẶC TRƯNG BẢNG & LỌC NaN
         # =====================================================================
         if self.has_bio:
-            self.bio_cols = []
+            available_bio_cols = []
             if self.has_bio_core:
-                self.bio_cols.extend(BIO_CORE_COLUMNS)
+                available_bio_cols.extend(BIO_CORE_COLUMNS)
             if self.has_spliceai:
-                self.bio_cols.extend(SPLICEAI_COLUMNS)
+                available_bio_cols.extend(SPLICEAI_COLUMNS)
+            self.bio_cols = (
+                list(available_bio_cols)
+                if bio_feature_names is None
+                else list(bio_feature_names)
+            )
+            unavailable_bio_cols = [
+                col for col in self.bio_cols if col not in available_bio_cols
+            ]
+            if unavailable_bio_cols:
+                raise ValueError(
+                    "Bio feature selection includes columns outside active modalities: "
+                    f"{unavailable_bio_cols}"
+                )
+            if not self.bio_cols:
+                raise ValueError("Bio feature selection must contain at least one column")
 
             missing_bio_cols = [col for col in self.bio_cols if col not in self.df.columns]
             if missing_bio_cols:

@@ -5,6 +5,7 @@ import random
 import importlib
 import shutil
 import hashlib
+import time
 from itertools import combinations
 from datetime import datetime
 
@@ -17,8 +18,11 @@ from tqdm.auto import tqdm
 
 from core.module05_fusion_classifier.dataset import (
     VariantFusionDataset,
+    BIO_CORE_COLUMNS,
+    SPLICEAI_COLUMNS,
     GEOM_FEATURE_COLUMNS,
     GEOM_V2_FEATURE_COLUMNS,
+    ALL_GEOM_FEATURE_COLUMNS,
 )
 from core.module05_fusion_classifier.fusion_model import MultiStrategyFusionModel
 from core.module05_fusion_classifier.xgboost_model import XGBoostFusionManager
@@ -201,6 +205,7 @@ class FusionBatchPipeline:
 
         self.metrics_csv_path = f"{self.batch_run_dir}/global_leaderboard_metrics.csv"
         self.profiling_csv_path = f"{self.batch_run_dir}/global_leaderboard_profiling.csv"
+        self.fit_profiling_csv_path = f"{self.batch_run_dir}/global_leaderboard_fit_profiling.csv"
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dim_cache = {}
@@ -317,6 +322,95 @@ class FusionBatchPipeline:
             df_profiling = pd.DataFrame(columns=["Experiment", "Geom_Features"])
         df_profiling.to_csv(self.profiling_csv_path, index=False)
 
+    def _upsert_fit_profile(self, row: dict):
+        if os.path.exists(self.fit_profiling_csv_path):
+            df_fit = self._read_csv_or_empty(self.fit_profiling_csv_path)
+        else:
+            df_fit = pd.DataFrame()
+
+        if not df_fit.empty and "Fit_ID" in df_fit.columns:
+            existing = df_fit["Fit_ID"].astype(str) == str(row["Fit_ID"])
+            if existing.any():
+                if row["Fit_Status"] != "trained_this_run":
+                    return
+                df_fit = df_fit.loc[~existing]
+
+        df_fit = pd.concat([df_fit, pd.DataFrame([row])], ignore_index=True)
+        df_fit.to_csv(self.fit_profiling_csv_path, index=False)
+
+    def _fit_profiling_summary(self) -> dict:
+        df_fit = self._read_csv_or_empty(self.fit_profiling_csv_path)
+        return {
+            "fit_profiling_path": self.fit_profiling_csv_path,
+            "num_rows_fit_profiling": int(len(df_fit)),
+        }
+
+    def _record_fit_profile(
+        self,
+        *,
+        fit_id: str,
+        fit_started_at: float | None,
+        fit_started_wall_time: str | None,
+        fit_scope: str,
+        train_samples: int,
+        val_samples: int,
+        epochs_completed: int | None,
+        batches_per_epoch: int | None,
+        optimizer_steps: int | None,
+        dataset_cfg: dict,
+        pooling: str,
+        ablation: str,
+        dna_name: str,
+        prot_name: str,
+        network: str,
+        geom_feature_key: str,
+    ):
+        trained = fit_started_at is not None
+        fit_duration = None
+        peak_gpu_memory_mb = None
+        if trained:
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+                peak_gpu_memory_mb = round(
+                    torch.cuda.max_memory_allocated(self.device) / (1024 ** 2),
+                    2,
+                )
+            fit_duration = round(time.perf_counter() - fit_started_at, 4)
+
+        row = {
+            "Fit_ID": fit_id,
+            "Fit_Status": "trained_this_run" if trained else "checkpoint_reused_timing_unavailable",
+            "Fit_Scope": fit_scope,
+            "Fit_Started_At": fit_started_wall_time,
+            "Fit_Duration_sec": fit_duration,
+            "Train_Samples": train_samples,
+            "Validation_Samples": val_samples,
+            "Epochs_Completed": epochs_completed,
+            "Batches_Per_Epoch": batches_per_epoch,
+            "Optimizer_Steps": optimizer_steps,
+            "Train_Samples_Per_sec": (
+                round(train_samples / fit_duration, 4)
+                if fit_duration and fit_duration > 0
+                else None
+            ),
+            "Peak_GPU_Memory_MB": peak_gpu_memory_mb,
+            "Device": str(self.device),
+            "GPU_Name": (
+                torch.cuda.get_device_name(self.device)
+                if self.device.type == "cuda"
+                else None
+            ),
+            "Train_Split": dataset_cfg["train"],
+            "Validation_Split": dataset_cfg["val"],
+            "Pooling": pooling,
+            "Ablation": ablation,
+            "DNA_Model": dna_name,
+            "Prot_Model": prot_name,
+            "Network": network,
+            "Geom_Features": geom_feature_key,
+        }
+        self._upsert_fit_profile(row)
+
     def _get_train_cache_ckpt_dir(
         self,
         dataset_cfg,
@@ -430,7 +524,15 @@ class FusionBatchPipeline:
             return "protein_pca_component"
         if name.startswith(("fusion_latent_", "f_global_")):
             return "learned_fusion_latent"
-        return "bio_core_or_spliceai"
+        if name in {column.lower() for column in ALL_GEOM_FEATURE_COLUMNS}:
+            return "geometry"
+        if name in {"af", "gnomade_af"}:
+            return "allele_frequencies"
+        if name in {column.lower() for column in SPLICEAI_COLUMNS}:
+            return "spliceai"
+        if name in {column.lower() for column in BIO_CORE_COLUMNS}:
+            return "conservation_scores"
+        return "other"
 
     def _save_shap(
         self,
@@ -640,6 +742,14 @@ class FusionBatchPipeline:
                 else float("nan")
             )
             for rank, (feat_expr, weight) in enumerate(exp.as_list(label=1), start=1):
+                feature_name = next(
+                    (
+                        name
+                        for name in sorted(feature_names, key=len, reverse=True)
+                        if feat_expr == name or name in feat_expr
+                    ),
+                    feat_expr,
+                )
                 rows.append({
                     "Variant_ID": variant_ids[i],
                     "true_label": int(y_true_arr[i]),
@@ -652,10 +762,28 @@ class FusionBatchPipeline:
                     "lime_local_prediction_pathogenic": local_pred_pathogenic,
                     "lime_num_samples": num_samples,
                     "rank": rank,
+                    "feature": feature_name,
+                    "feature_group": self._feature_group(feature_name),
                     "feature_rule": feat_expr,
                     "weight_for_pathogenic_probability": float(weight),
                 })
-        pd.DataFrame(rows).to_csv(f"{save_dir}/lime_local_explanations.csv", index=False)
+        local_df = pd.DataFrame(rows)
+        local_df.to_csv(f"{save_dir}/lime_local_explanations.csv", index=False)
+        global_lime = (
+            local_df.groupby(["feature", "feature_group"], as_index=False)
+            .agg(
+                mean_abs_lime_weight=(
+                    "weight_for_pathogenic_probability",
+                    lambda values: float(values.abs().mean()),
+                ),
+                mean_lime_weight=("weight_for_pathogenic_probability", "mean"),
+                explained_variants=("Variant_ID", "nunique"),
+                explanation_rows=("Variant_ID", "count"),
+                mean_rank=("rank", "mean"),
+            )
+            .sort_values("mean_abs_lime_weight", ascending=False)
+        )
+        global_lime.to_csv(f"{save_dir}/lime_global_importance.csv", index=False)
         info = {
             "background_samples": int(len(bg_idx)),
             "background_class_counts": {str(int(cls)): int((np.asarray(y_train)[bg_idx] == cls).sum()) for cls in np.unique(np.asarray(y_train)[bg_idx])},
@@ -737,6 +865,7 @@ class FusionBatchPipeline:
         geom_feature_names=None,
         geometry_context=None,
         loader_seed=None,
+        bio_feature_names=None,
     ):
         geometry_active = "geom" in [str(mod).lower() for mod in active_mods]
         selected_geom = set(geom_feature_names or self.geom_feature_names or GEOM_FEATURE_COLUMNS)
@@ -757,6 +886,7 @@ class FusionBatchPipeline:
             prot_pt_path=_resolve_pt_path(self.embed_dir, split_name, prot_name, pooling) if prot_name != "None" else None,
             active_modalities=active_mods,
             geom_feature_names=geom_feature_names or self.geom_feature_names,
+            bio_feature_names=bio_feature_names,
             is_train=is_train,
         )
         generator = torch.Generator()
@@ -862,6 +992,7 @@ class FusionBatchPipeline:
         geom_feature_names=None,
         ablation_label=None,
         run_explainability=None,
+        bio_feature_names=None,
     ):
         # Keep model names for geometry file resolution even when DNA/Prot are not active modalities.
         dna_name = dna_cfg["name"] if dna_cfg else "None"
@@ -915,15 +1046,18 @@ class FusionBatchPipeline:
 
         train_loader = self._get_dataloader(
             dataset_cfg["train"], pooling, dna_name, prot_name, active_mods, True,
-            effective_geom_feature_names, dataset_cfg["train"]
+            effective_geom_feature_names, dataset_cfg["train"],
+            bio_feature_names=bio_feature_names,
         )
         val_loader = self._get_dataloader(
             dataset_cfg["val"], pooling, dna_name, prot_name, active_mods, False,
-            effective_geom_feature_names, dataset_cfg["train"]
+            effective_geom_feature_names, dataset_cfg["train"],
+            bio_feature_names=bio_feature_names,
         )
         test_loader = self._get_dataloader(
             dataset_cfg["test"], pooling, dna_name, prot_name, active_mods, False,
-            effective_geom_feature_names, dataset_cfg["train"], config_seed
+            effective_geom_feature_names, dataset_cfg["train"], config_seed,
+            bio_feature_names=bio_feature_names,
         )
         train_dataset = train_loader.dataset
         bio_dim = len(train_dataset.bio_cols) if train_dataset.has_bio else 0
@@ -958,6 +1092,9 @@ class FusionBatchPipeline:
             shared_best_model_path = f"{train_cache_ckpt_dir}/best_model.pth"
             shared_hybrid_feat_path = f"{train_cache_ckpt_dir}/hybrid_feature_extractor.pth"
             shared_xgb_json_path = f"{train_cache_ckpt_dir}/best_model_xgboost.json"
+            fit_id = hashlib.sha256(
+                os.path.normcase(os.path.abspath(train_cache_ckpt_dir)).encode("utf-8")
+            ).hexdigest()[:16]
 
             profiler = FusionEvaluatorProfiler(
                 f"{exp_dir}/tensorboard_logs",
@@ -984,6 +1121,11 @@ class FusionBatchPipeline:
 
             val_metrics, test_metrics, e2e_profiling = {}, {}, {}
             vids_t, y_true_t, y_probs_t, y_preds_t = [], [], [], []
+            fit_started_at = None
+            fit_started_wall_time = None
+            fit_epochs_completed = 0
+            fit_batches_per_epoch = 0
+            fit_optimizer_steps = 0
 
             if exp["type"] == "pytorch":
                 profiler.profile_pytorch_fusion(model, d_in_safe)
@@ -991,6 +1133,12 @@ class FusionBatchPipeline:
                     print("[*] Reuse trained PyTorch checkpoint from shared train/val cache")
                     model.load_state_dict(torch.load(shared_best_model_path, weights_only=True))
                 else:
+                    if self.device.type == "cuda":
+                        torch.cuda.reset_peak_memory_stats(self.device)
+                    fit_started_at = time.perf_counter()
+                    fit_started_wall_time = datetime.now().astimezone().isoformat(timespec="seconds")
+                    fit_batches_per_epoch = len(train_loader)
+                    fit_optimizer_steps = 0
                     criterion = nn.BCEWithLogitsLoss()
                     optimizer = torch.optim.AdamW(
                         model.parameters(),
@@ -1029,6 +1177,7 @@ class FusionBatchPipeline:
                             optimizer.step()
                             total_loss += float(loss.item())
                             train_steps += 1
+                            fit_optimizer_steps += 1
 
                         model.eval()
                         val_total_loss = 0.0
@@ -1056,6 +1205,7 @@ class FusionBatchPipeline:
                             torch.cat(all_preds_v).squeeze(-1).numpy(),
                         )
                         val_mcc = val_metrics["MCC"]
+                        fit_epochs_completed += 1
                         train_loss_epoch = total_loss / max(train_steps, 1)
                         val_loss_epoch = val_total_loss / max(val_steps, 1)
                         profiler.log_epoch_scalars(epoch, train_loss_epoch, val_loss_epoch, val_metrics)
@@ -1089,6 +1239,24 @@ class FusionBatchPipeline:
 
                 if not os.path.exists(best_model_path):
                     shutil.copy2(shared_best_model_path, best_model_path)
+                self._record_fit_profile(
+                    fit_id=fit_id,
+                    fit_started_at=fit_started_at,
+                    fit_started_wall_time=fit_started_wall_time,
+                    fit_scope="pytorch_train_and_validation",
+                    train_samples=len(train_loader.dataset),
+                    val_samples=len(val_loader.dataset),
+                    epochs_completed=fit_epochs_completed if fit_started_at is not None else None,
+                    batches_per_epoch=fit_batches_per_epoch if fit_started_at is not None else None,
+                    optimizer_steps=fit_optimizer_steps if fit_started_at is not None else None,
+                    dataset_cfg=dataset_cfg,
+                    pooling=pooling,
+                    ablation=ablation_str,
+                    dna_name=dna_name,
+                    prot_name=prot_name,
+                    network=exp["name"],
+                    geom_feature_key=geom_feature_key,
+                )
                 model.eval()
 
                 # Re-evaluate the selected checkpoint on validation so the
@@ -1143,6 +1311,12 @@ class FusionBatchPipeline:
                     model.load_state_dict(torch.load(shared_hybrid_feat_path, weights_only=True))
                     xgb_manager.load_model(train_cache_ckpt_dir, prefix="best_model")
                 else:
+                    if self.device.type == "cuda":
+                        torch.cuda.reset_peak_memory_stats(self.device)
+                    fit_started_at = time.perf_counter()
+                    fit_started_wall_time = datetime.now().astimezone().isoformat(timespec="seconds")
+                    fit_batches_per_epoch = len(train_loader)
+                    fit_optimizer_steps = 0
                     criterion = nn.BCEWithLogitsLoss()
                     optimizer = torch.optim.AdamW(model.parameters(), lr=self.config["lr"])
 
@@ -1159,6 +1333,8 @@ class FusionBatchPipeline:
                             loss = criterion(logits, batch["label"].to(self.device))
                             loss.backward()
                             optimizer.step()
+                            fit_optimizer_steps += 1
+                        fit_epochs_completed += 1
 
                     f_glob_tr, _, _, _, y_tr, _ = _extract_features_for_ml(model, train_loader, self.device, True)
                     y_train_explain = y_tr
@@ -1168,6 +1344,24 @@ class FusionBatchPipeline:
                     xgb_manager.save_model(train_cache_ckpt_dir, prefix="best_model")
                     torch.save(model.state_dict(), shared_hybrid_feat_path)
 
+                self._record_fit_profile(
+                    fit_id=fit_id,
+                    fit_started_at=fit_started_at,
+                    fit_started_wall_time=fit_started_wall_time,
+                    fit_scope="hybrid_train_feature_extraction_and_xgboost",
+                    train_samples=len(train_loader.dataset),
+                    val_samples=len(val_loader.dataset),
+                    epochs_completed=fit_epochs_completed if fit_started_at is not None else None,
+                    batches_per_epoch=fit_batches_per_epoch if fit_started_at is not None else None,
+                    optimizer_steps=fit_optimizer_steps if fit_started_at is not None else None,
+                    dataset_cfg=dataset_cfg,
+                    pooling=pooling,
+                    ablation=ablation_str,
+                    dna_name=dna_name,
+                    prot_name=prot_name,
+                    network=exp["name"],
+                    geom_feature_key=geom_feature_key,
+                )
                 profiler.add_xgboost_model_size(xgb_manager.model)
                 f_glob_vl, _, _, _, y_vl, _ = _extract_features_for_ml(
                     model, val_loader, self.device, True
@@ -1240,6 +1434,10 @@ class FusionBatchPipeline:
                     print("[*] Reuse trained XGBoost-Pure artifacts from shared train/val cache")
                     xgb_manager.load_model(train_cache_ckpt_dir, prefix="best_model")
                 else:
+                    if self.device.type == "cuda":
+                        torch.cuda.reset_peak_memory_stats(self.device)
+                    fit_started_at = time.perf_counter()
+                    fit_started_wall_time = datetime.now().astimezone().isoformat(timespec="seconds")
                     _, dna_tr_fit, prot_tr_fit, bg_tr_fit, y_tr_fit, _ = _extract_features_for_ml(model, train_loader, self.device, False)
                     _, dna_vl_fit, prot_vl_fit, bg_vl_fit, y_vl_fit, _ = _extract_features_for_ml(model, val_loader, self.device, False)
                     xgb_manager.train_pure(
@@ -1255,6 +1453,24 @@ class FusionBatchPipeline:
                     xgb_manager.save_model(train_cache_ckpt_dir, prefix="best_model")
                     del dna_tr_fit, prot_tr_fit, bg_tr_fit, y_tr_fit, dna_vl_fit, prot_vl_fit, bg_vl_fit, y_vl_fit
 
+                self._record_fit_profile(
+                    fit_id=fit_id,
+                    fit_started_at=fit_started_at,
+                    fit_started_wall_time=fit_started_wall_time,
+                    fit_scope="xgboost_feature_extraction_and_training",
+                    train_samples=len(train_loader.dataset),
+                    val_samples=len(val_loader.dataset),
+                    epochs_completed=None,
+                    batches_per_epoch=None,
+                    optimizer_steps=None,
+                    dataset_cfg=dataset_cfg,
+                    pooling=pooling,
+                    ablation=ablation_str,
+                    dna_name=dna_name,
+                    prot_name=prot_name,
+                    network=exp["name"],
+                    geom_feature_key=geom_feature_key,
+                )
                 _, dna_vl, prot_vl, bg_vl, y_vl, _ = _extract_features_for_ml(
                     model, val_loader, self.device, False
                 )
@@ -1363,6 +1579,7 @@ class FusionBatchPipeline:
             profiler.close()
 
             metric_row = {
+                "Fit_ID": fit_id,
                 "Dataset": dataset_cfg["name"],
                 "Pooling": pooling,
                 "Ablation": ablation_str,
@@ -1378,6 +1595,7 @@ class FusionBatchPipeline:
             g_metrics.append(metric_row)
             g_prof.append(
                 {
+                    "Fit_ID": fit_id,
                     "Experiment": f"{exp_name}__{dataset_cfg['name']}",
                     "Geom_Features": geom_feature_key,
                     **e2e_profiling,
@@ -1492,6 +1710,7 @@ class FusionBatchPipeline:
             "profiling_path": self.profiling_csv_path,
             "num_rows_metrics": int(len(df_metrics)),
             "num_rows_profiling": int(len(df_profiling)),
+            **self._fit_profiling_summary(),
             "geom_ablation_rows": geom_rows,
             "geom_subset_count": len(geom_subsets),
             "expected_geom_rows": expected_rows,
@@ -1571,6 +1790,92 @@ class FusionBatchPipeline:
             "profiling_path": self.profiling_csv_path,
             "num_rows_metrics": int(len(df_metrics)),
             "num_rows_profiling": int(len(df_profiling)),
+            **self._fit_profiling_summary(),
+        }
+
+    def run_config_matrix(self, configs, resume=True):
+        """Run explicit feature/model configurations across configured datasets.
+
+        Each config may provide ``label``, ``active_modalities``,
+        ``dna_model_name``, ``prot_model_name``, ``geom_feature_names``,
+        ``bio_feature_names``, ``experiment_names``, ``poolings``, and
+        ``run_explainability``. Shared train/validation checkpoints are reused
+        across test datasets by ``_run_group``.
+        """
+        if not configs:
+            raise ValueError("configs must contain at least one experiment config.")
+
+        model_by_name = {model["name"]: model for model in self.models_space}
+        experiment_by_name = {experiment["name"]: experiment for experiment in self.experiments}
+        if resume:
+            global_metrics, global_profiling, completed_by_pooling = self._load_resume_state()
+        else:
+            global_metrics, global_profiling, completed_by_pooling = [], [], {}
+        self._persist_global_outputs(global_metrics, global_profiling)
+
+        for config in configs:
+            label = str(config["label"])
+            active_mods = [str(mod).lower() for mod in config["active_modalities"]]
+            dna_name = config.get("dna_model_name")
+            prot_name = config.get("prot_model_name")
+            if "dna" in active_mods and dna_name is None:
+                raise ValueError(f"{label}: dna_model_name is required when DNA is active.")
+            if "prot" in active_mods and prot_name is None:
+                raise ValueError(f"{label}: prot_model_name is required when protein is active.")
+            if "geom" in active_mods and not config.get("geom_feature_names"):
+                raise ValueError(f"{label}: geom_feature_names are required when geometry is active.")
+
+            dna_cfg = model_by_name.get(dna_name) if dna_name is not None else None
+            prot_cfg = model_by_name.get(prot_name) if prot_name is not None else None
+            if dna_name is not None and (dna_cfg is None or dna_cfg.get("seq_type") != "dna"):
+                raise ValueError(f"{label}: invalid DNA model name: {dna_name}")
+            if prot_name is not None and (prot_cfg is None or prot_cfg.get("seq_type") != "protein"):
+                raise ValueError(f"{label}: invalid protein model name: {prot_name}")
+
+            pooling_names = config.get("poolings", self.pooling_strategies)
+            invalid_poolings = sorted(set(pooling_names).difference(self.pooling_strategies))
+            if invalid_poolings:
+                raise ValueError(f"{label}: poolings are not configured: {invalid_poolings}")
+            experiment_names = config.get("experiment_names", list(experiment_by_name))
+            invalid_experiments = sorted(set(experiment_names).difference(experiment_by_name))
+            if invalid_experiments:
+                raise ValueError(f"{label}: unknown architectures: {invalid_experiments}")
+            selected_experiments = [experiment_by_name[name] for name in experiment_names]
+
+            print(
+                f"\n[CONFIG MATRIX] {label} | modalities={active_mods} | "
+                f"poolings={list(pooling_names)} | architectures={len(selected_experiments)}"
+            )
+            for pooling in pooling_names:
+                completed_keys = set(completed_by_pooling.get(pooling, set()))
+                for dataset_cfg in self.datasets:
+                    self._run_group(
+                        dna_cfg,
+                        prot_cfg,
+                        pooling,
+                        active_mods,
+                        dataset_cfg,
+                        completed_keys,
+                        global_metrics,
+                        global_profiling,
+                        experiments_subset=selected_experiments,
+                        geom_feature_names=config.get("geom_feature_names"),
+                        ablation_label=label,
+                        run_explainability=config.get("run_explainability", False),
+                        bio_feature_names=config.get("bio_feature_names"),
+                    )
+                completed_by_pooling[pooling] = completed_keys
+                self._persist_global_outputs(global_metrics, global_profiling)
+
+        df_metrics = self._read_csv_or_empty(self.metrics_csv_path)
+        df_profiling = self._read_csv_or_empty(self.profiling_csv_path)
+        return {
+            "batch_run_dir": self.batch_run_dir,
+            "metrics_path": self.metrics_csv_path,
+            "profiling_path": self.profiling_csv_path,
+            "num_rows_metrics": int(len(df_metrics)),
+            "num_rows_profiling": int(len(df_profiling)),
+            **self._fit_profiling_summary(),
         }
 
     def run(self, resume: bool = False):
@@ -1746,6 +2051,7 @@ class FusionBatchPipeline:
             "profiling_path": self.profiling_csv_path,
             "num_rows_metrics": int(len(df_metrics)),
             "num_rows_profiling": int(len(df_profiling)),
+            **self._fit_profiling_summary(),
         }
 
     def run_sequence_ablation(
@@ -1822,6 +2128,7 @@ class FusionBatchPipeline:
             "profiling_path": self.profiling_csv_path,
             "num_rows_metrics": int(len(df_metrics)),
             "num_rows_profiling": int(len(df_profiling)),
+            **self._fit_profiling_summary(),
         }
 
     def run_factorial_sequence_ablation(
@@ -1893,6 +2200,7 @@ class FusionBatchPipeline:
             "profiling_path": self.profiling_csv_path,
             "num_rows_metrics": int(len(df_metrics)),
             "num_rows_profiling": int(len(df_profiling)),
+            **self._fit_profiling_summary(),
         }
 
 
