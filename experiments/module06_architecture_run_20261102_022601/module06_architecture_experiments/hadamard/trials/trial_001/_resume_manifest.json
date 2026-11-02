@@ -1,0 +1,107 @@
+{
+  "config": {
+    "architecture": "HadamardFusion",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "name": "nt_v1_500m_dna_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "hadamard_config": {
+      "bio_hidden_dim": 256,
+      "dropout": 0.2,
+      "early_stop_patience": 6,
+      "fusion_dim": 512,
+      "head_dim": 128,
+      "hidden_dim": 512,
+      "learning_rate": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "seed": 42,
+      "weight_decay": 0.001
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 42,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "protein_model": {
+      "name": "esm2_650m_prot_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai"
+        ],
+        "geom_feature_names": null,
+        "name": "A_no_geometry"
+      },
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "projected_pairwise_hadamard_with_skip"
+  },
+  "config_sha256": "f1712621cfbb30856db4aa7bb28ed0d719b78efc5584b920bef0a7ccfe27b8b3",
+  "stage": "module06_hadamard",
+  "version": 1
+}
