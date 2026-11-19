@@ -103,6 +103,7 @@ def inspect_token_cache(cache_root, model_configs, split_configs):
 
 def extract_missing_token_caches(
     *, model_configs, split_configs, cache_root, batch_run_dir, device="cuda",
+    strict_context=False,
 ):
     """Resume missing shards through Module 6's shared token-cache extractor."""
     from core.module06_architecture_experiments.token_embedding_cache import (
@@ -151,6 +152,7 @@ def extract_missing_token_caches(
             batch_run_dir=batch_run_dir,
             device=device,
             batch_sizes={model["name"]: int(model["batch_size"]) for model in missing_models},
+            strict_context=strict_context,
         )
 
     # Produce one complete index for the requested model set, including caches

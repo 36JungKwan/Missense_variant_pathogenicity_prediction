@@ -53,8 +53,11 @@ def _atomic_torch_save(payload, path):
         raise
 
 
-def _tokenize(tokenizer, sequences, device, model_id):
-    options = {"return_tensors": "pt", "padding": True, "truncation": True}
+def _tokenize(tokenizer, sequences, device, model_id, *, strict_context=False, model=None):
+    options = {
+        "return_tensors": "pt", "padding": True,
+        "truncation": not strict_context,
+    }
     if getattr(tokenizer, "is_fast", False):
         options["return_offsets_mapping"] = True
     try:
@@ -63,6 +66,23 @@ def _tokenize(tokenizer, sequences, device, model_id):
         options.pop("return_offsets_mapping", None)
         encoded = tokenizer(sequences, **options)
     encoded = encoded.to(device)
+
+    if strict_context:
+        config = getattr(model, "config", None)
+        capacity = next((
+            int(getattr(config, key)) for key in (
+                "max_position_embeddings", "n_positions", "max_seq_len",
+                "max_sequence_length",
+            ) if getattr(config, key, None) is not None
+            and 0 < int(getattr(config, key)) < 10_000_000
+        ), None) if config is not None else None
+        token_count = int(encoded["attention_mask"].sum(dim=1).max().item()) if "attention_mask" in encoded else int(encoded["input_ids"].shape[1])
+        if capacity is not None and token_count > capacity:
+            raise ValueError(
+                f"Requested full sequence needs {token_count} FM tokens, exceeding "
+                f"{model_id} context capacity {capacity}. Refusing to truncate a "
+                "sequence-length ablation; use a supported sequence length/model."
+            )
 
     # Keep the same NTv3 padding convention as Module 2 so hidden token axes
     # remain compatible with its convolutional downsampling implementation.
@@ -134,10 +154,53 @@ def _variant_indices(manager, encoded_ref, encoded_alt, seq_type, char_positions
     return ref_indices.detach().cpu().to(torch.int32), alt_indices.detach().cpu().to(torch.int32)
 
 
+def _prepare_model_sequences(sequences, char_positions, model_config):
+    """Apply an optional symmetric crop while keeping the variant at the center."""
+    target_length = model_config.get("center_crop_length")
+    if target_length is None:
+        return [str(value) for value in sequences], [int(value) for value in char_positions]
+
+    target_length = int(target_length)
+    expected_source_length = model_config.get("source_sequence_length")
+    if target_length <= 0 or target_length % 2 != 1:
+        raise ValueError(f"Center crop length must be a positive odd value, got {target_length}.")
+    output_sequences, output_positions = [], []
+    for row, (sequence, position) in enumerate(zip(sequences, char_positions)):
+        sequence = str(sequence)
+        position = int(position)
+        if expected_source_length is not None and len(sequence) != int(expected_source_length):
+            raise ValueError(
+                f"Expected source sequence length {expected_source_length}, got {len(sequence)} "
+                f"for model cache {model_config['name']}."
+            )
+        if len(sequence) < target_length:
+            raise ValueError(
+                f"Cannot center-crop row {row}: source length {len(sequence)} < target {target_length}."
+            )
+        if position != len(sequence) // 2:
+            raise ValueError(
+                f"Expected the variant at the source-sequence center, got position {position} "
+                f"for length {len(sequence)}. Refusing a shifted DNA window."
+            )
+        start = position - target_length // 2
+        stop = start + target_length
+        cropped = sequence[start:stop]
+        cropped_position = position - start
+        if len(cropped) != target_length or cropped_position != target_length // 2:
+            raise RuntimeError(
+                f"Center crop failed to preserve the variant at index {target_length // 2}."
+            )
+        output_sequences.append(cropped)
+        output_positions.append(cropped_position)
+    if len(output_sequences) != len(sequences):
+        raise ValueError("Sequence and variant-position batch sizes differ during center crop.")
+    return output_sequences, output_positions
+
+
 def _expected_manifest(model_config, split_config, batch_size):
     source = Path(split_config["input_path"])
     stat = source.stat()
-    return {
+    expected = {
         "schema_version": TOKEN_CACHE_SCHEMA_VERSION,
         "model_name": model_config["name"],
         "model_id": model_config["model_id"],
@@ -154,9 +217,16 @@ def _expected_manifest(model_config, split_config, batch_size):
         "storage_dtype": "float16",
         "row_order": "source_parquet_order",
     }
+    if model_config.get("center_crop_length") is not None:
+        expected.update({
+            "source_sequence_length": int(model_config["source_sequence_length"]),
+            "center_crop_length": int(model_config["center_crop_length"]),
+            "crop_anchor": "variant_center",
+        })
+    return expected
 
 
-def _estimate_split_storage(dataset, manager, model_config):
+def _estimate_split_storage(dataset, manager, model_config, *, strict_context=False):
     hidden_size = getattr(manager.model.config, "hidden_size", None)
     if hidden_size is None:
         hidden_size = getattr(manager.model.config, "d_model", None)
@@ -165,8 +235,19 @@ def _estimate_split_storage(dataset, manager, model_config):
     sample_count = min(32, len(dataset))
     refs = dataset.df[dataset.ref_col].astype(str).head(sample_count).tolist()
     alts = dataset.df[dataset.alt_col].astype(str).head(sample_count).tolist()
-    ref_tokens = _tokenize(manager.tokenizer, refs, manager.device, manager.model_id)
-    alt_tokens = _tokenize(manager.tokenizer, alts, manager.device, manager.model_id)
+    source_positions = dataset.variant_char_positions[:sample_count].tolist()
+    refs, positions = _prepare_model_sequences(refs, source_positions, model_config)
+    alts, alt_positions = _prepare_model_sequences(alts, source_positions, model_config)
+    if alt_positions != positions:
+        raise RuntimeError("Ref/alt variant centers diverged during model sequence preparation.")
+    ref_tokens = _tokenize(
+        manager.tokenizer, refs, manager.device, manager.model_id,
+        strict_context=strict_context, model=manager.model,
+    )
+    alt_tokens = _tokenize(
+        manager.tokenizer, alts, manager.device, manager.model_id,
+        strict_context=strict_context, model=manager.model,
+    )
     max_sample_tokens = int(
         ref_tokens["attention_mask"].sum(dim=1).max().item()
         + alt_tokens["attention_mask"].sum(dim=1).max().item()
@@ -219,7 +300,7 @@ def _check_manifest(folder, expected):
     return manifest
 
 
-def _extract_split(manager, model_config, split_config, output_folder, batch_size):
+def _extract_split(manager, model_config, split_config, output_folder, batch_size, *, strict_context=False):
     dataset = BioSequenceDataset(
         parquet_path=split_config["input_path"],
         seq_type=model_config["seq_type"],
@@ -237,7 +318,9 @@ def _extract_split(manager, model_config, split_config, output_folder, batch_siz
     }
     folder = Path(output_folder)
     folder.mkdir(parents=True, exist_ok=True)
-    estimated_storage_bytes = _estimate_split_storage(dataset, manager, model_config)
+    estimated_storage_bytes = _estimate_split_storage(
+        dataset, manager, model_config, strict_context=strict_context
+    )
     if estimated_storage_bytes is not None:
         free_bytes = shutil.disk_usage(folder).free
         print(
@@ -282,10 +365,24 @@ def _extract_split(manager, model_config, split_config, output_folder, batch_siz
         if shard_name in completed and shard_path.exists():
             continue
 
-        char_positions = [int(value) for value in batch["variant_char_pos"]]
+        source_positions = [int(value) for value in batch["variant_char_pos"]]
+        ref_sequences, char_positions = _prepare_model_sequences(
+            batch["ref_seq"], source_positions, model_config
+        )
+        alt_sequences, alt_char_positions = _prepare_model_sequences(
+            batch["alt_seq"], source_positions, model_config
+        )
+        if alt_char_positions != char_positions:
+            raise RuntimeError("Ref/alt variant centers diverged during model sequence preparation.")
         device = manager.device
-        encoded_ref = _tokenize(manager.tokenizer, batch["ref_seq"], device, manager.model_id)
-        encoded_alt = _tokenize(manager.tokenizer, batch["alt_seq"], device, manager.model_id)
+        encoded_ref = _tokenize(
+            manager.tokenizer, ref_sequences, device, manager.model_id,
+            strict_context=strict_context, model=manager.model,
+        )
+        encoded_alt = _tokenize(
+            manager.tokenizer, alt_sequences, device, manager.model_id,
+            strict_context=strict_context, model=manager.model,
+        )
         use_cuda_autocast = (
             device.startswith("cuda")
             and "nucleotide-transformer-v2" in manager.model_id.lower()
@@ -369,7 +466,7 @@ def _extract_split(manager, model_config, split_config, output_folder, batch_siz
 
 def run_token_embedding_extraction(
     model_configs, split_configs, cache_root, batch_run_dir, device="cuda",
-    batch_sizes=None,
+    batch_sizes=None, strict_context=False,
 ):
     """Extract/resume token caches and persist their locations in the active batch.
 
@@ -422,7 +519,8 @@ def run_token_embedding_extraction(
                 index["updated_at"] = pd.Timestamp.utcnow().isoformat()
                 _atomic_json(index, index_path)
                 manifest = _extract_split(
-                    manager, model_config, split_config, output_folder, model_batch_size
+                    manager, model_config, split_config, output_folder, model_batch_size,
+                    strict_context=strict_context,
                 )
                 model_index[split_name] = {
                     "status": manifest["status"],

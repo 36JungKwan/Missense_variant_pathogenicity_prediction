@@ -1,0 +1,566 @@
+{
+  "schema_version": 1,
+  "cache_root": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+  "models": {
+    "nt_v1_500m_dna_301": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 726,
+        "hidden_size": 1280,
+        "storage_bytes": 6195041568,
+        "estimated_storage_bytes": 6673209753,
+        "elapsed_seconds": 56.94876679999288
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 429,
+        "hidden_size": 1280,
+        "storage_bytes": 3657285360,
+        "estimated_storage_bytes": 3939574579,
+        "elapsed_seconds": 30.904294100007974
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 191,
+        "hidden_size": 1280,
+        "storage_bytes": 1626975184,
+        "estimated_storage_bytes": 1752551424,
+        "elapsed_seconds": 13.632272799994098
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 22,
+        "hidden_size": 1280,
+        "storage_bytes": 187655776,
+        "estimated_storage_bytes": 202140057,
+        "elapsed_seconds": 1.6587702999968315
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 46,
+        "hidden_size": 1280,
+        "storage_bytes": 392929120,
+        "estimated_storage_bytes": 423257702,
+        "elapsed_seconds": 3.3138136000052327
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_301\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 42,
+        "hidden_size": 1280,
+        "storage_bytes": 355826720,
+        "estimated_storage_bytes": 383289753,
+        "elapsed_seconds": 2.995875199994771
+      }
+    },
+    "nt_v1_500m_dna_601": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 726,
+        "hidden_size": 1280,
+        "storage_bytes": 12147893536,
+        "estimated_storage_bytes": 13089757593,
+        "elapsed_seconds": 92.29469929999323
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 429,
+        "hidden_size": 1280,
+        "storage_bytes": 7171591920,
+        "estimated_storage_bytes": 7727627059,
+        "elapsed_seconds": 53.7102132
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 191,
+        "hidden_size": 1280,
+        "storage_bytes": 3190342736,
+        "estimated_storage_bytes": 3437697024,
+        "elapsed_seconds": 23.596954199994798
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 22,
+        "hidden_size": 1280,
+        "storage_bytes": 367975264,
+        "estimated_storage_bytes": 396505497,
+        "elapsed_seconds": 2.7068399999989197
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 46,
+        "hidden_size": 1280,
+        "storage_bytes": 770497120,
+        "estimated_storage_bytes": 830236262,
+        "elapsed_seconds": 5.674473000006401
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_601\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 42,
+        "hidden_size": 1280,
+        "storage_bytes": 697741216,
+        "estimated_storage_bytes": 751837593,
+        "elapsed_seconds": 5.063409099995624
+      }
+    },
+    "nt_v1_500m_dna_2001": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 726,
+        "hidden_size": 1280,
+        "storage_bytes": 40126252448,
+        "estimated_storage_bytes": 43247532441,
+        "elapsed_seconds": 326.90870449999056
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 429,
+        "hidden_size": 1280,
+        "storage_bytes": 23688804976,
+        "estimated_storage_bytes": 25531473715,
+        "elapsed_seconds": 248.76345250000304
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 191,
+        "hidden_size": 1280,
+        "storage_bytes": 10538158032,
+        "estimated_storage_bytes": 11357881344,
+        "elapsed_seconds": 111.96056189999217
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 22,
+        "hidden_size": 1280,
+        "storage_bytes": 1215475744,
+        "estimated_storage_bytes": 1310023065,
+        "elapsed_seconds": 8.97643500000413
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 46,
+        "hidden_size": 1280,
+        "storage_bytes": 2545063904,
+        "estimated_storage_bytes": 2743035494,
+        "elapsed_seconds": 34.44951299999957
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_2001\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 42,
+        "hidden_size": 1280,
+        "storage_bytes": 2304736736,
+        "estimated_storage_bytes": 2484012441,
+        "elapsed_seconds": 21.18748290000076
+      }
+    },
+    "nt_v1_500m_dna_10001": {
+      "train3": {
+        "status": "in_progress",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_10001\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_10001\\train3\\manifest.json"
+      }
+    },
+    "nt_v1_500m_dna_5001": {
+      "train3": {
+        "status": "in_progress",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_5001\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_5001\\train3\\manifest.json"
+      }
+    },
+    "nt_v1_500m_dna_3501": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 726,
+        "hidden_size": 1280,
+        "storage_bytes": 69958638880,
+        "estimated_storage_bytes": 75330271641,
+        "elapsed_seconds": 806.2970553999912
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 429,
+        "hidden_size": 1280,
+        "storage_bytes": 41260337520,
+        "estimated_storage_bytes": 44471736115,
+        "elapsed_seconds": 470.64594729999953
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 191,
+        "hidden_size": 1280,
+        "storage_bytes": 18354995408,
+        "estimated_storage_bytes": 19783609344,
+        "elapsed_seconds": 214.83487890000106
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 22,
+        "hidden_size": 1280,
+        "storage_bytes": 2117073184,
+        "estimated_storage_bytes": 2281850265,
+        "elapsed_seconds": 17.886120900002425
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 46,
+        "hidden_size": 1280,
+        "storage_bytes": 4432903904,
+        "estimated_storage_bytes": 4777928294,
+        "elapsed_seconds": 50.51782880000246
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_3501\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 42,
+        "hidden_size": 1280,
+        "storage_bytes": 4014309216,
+        "estimated_storage_bytes": 4326751641,
+        "elapsed_seconds": 47.160624399999506
+      }
+    },
+    "esm1b_650m_prot_31": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 1451,
+        "hidden_size": 1280,
+        "storage_bytes": 3936184784,
+        "estimated_storage_bytes": 4234921574,
+        "elapsed_seconds": 80.50952179999149
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 857,
+        "hidden_size": 1280,
+        "storage_bytes": 2323773808,
+        "estimated_storage_bytes": 2500114636,
+        "elapsed_seconds": 49.26932249999663
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 381,
+        "hidden_size": 1280,
+        "storage_bytes": 1033752304,
+        "estimated_storage_bytes": 1112196096,
+        "elapsed_seconds": 18.174174100000528
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 44,
+        "hidden_size": 1280,
+        "storage_bytes": 119233088,
+        "estimated_storage_bytes": 128281190,
+        "elapsed_seconds": 1.5933159999985946
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 92,
+        "hidden_size": 1280,
+        "storage_bytes": 249660032,
+        "estimated_storage_bytes": 268605849,
+        "elapsed_seconds": 3.405870099988533
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_31\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 84,
+        "hidden_size": 1280,
+        "storage_bytes": 226087552,
+        "estimated_storage_bytes": 243241574,
+        "elapsed_seconds": 3.9257250999944517
+      }
+    },
+    "esm1b_650m_prot_101": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 1451,
+        "hidden_size": 1280,
+        "storage_bytes": 12270097744,
+        "estimated_storage_bytes": 13218088550,
+        "elapsed_seconds": 163.18917489999149
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 857,
+        "hidden_size": 1280,
+        "storage_bytes": 7243748272,
+        "estimated_storage_bytes": 7803388108,
+        "elapsed_seconds": 82.9748311000003
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 381,
+        "hidden_size": 1280,
+        "storage_bytes": 3222443056,
+        "estimated_storage_bytes": 3471399936,
+        "elapsed_seconds": 44.119838599988725
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 44,
+        "hidden_size": 1280,
+        "storage_bytes": 371678272,
+        "estimated_storage_bytes": 400392806,
+        "elapsed_seconds": 3.3660256000002846
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 92,
+        "hidden_size": 1280,
+        "storage_bytes": 778250304,
+        "estimated_storage_bytes": 838375833,
+        "elapsed_seconds": 6.953494300003513
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_101\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 84,
+        "hidden_size": 1280,
+        "storage_bytes": 704763520,
+        "estimated_storage_bytes": 759208550,
+        "elapsed_seconds": 13.170250600000145
+      }
+    },
+    "esm1b_650m_prot_201": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 1451,
+        "hidden_size": 1280,
+        "storage_bytes": 24175801680,
+        "estimated_storage_bytes": 26051184230,
+        "elapsed_seconds": 303.68973939999705
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 857,
+        "hidden_size": 1280,
+        "storage_bytes": 14272361264,
+        "estimated_storage_bytes": 15379493068,
+        "elapsed_seconds": 173.5711847000057
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 381,
+        "hidden_size": 1280,
+        "storage_bytes": 6349178032,
+        "estimated_storage_bytes": 6841691136,
+        "elapsed_seconds": 84.36603879999893
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 44,
+        "hidden_size": 1280,
+        "storage_bytes": 732317248,
+        "estimated_storage_bytes": 789123686,
+        "elapsed_seconds": 6.700697100008256
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 92,
+        "hidden_size": 1280,
+        "storage_bytes": 1533386304,
+        "estimated_storage_bytes": 1652332953,
+        "elapsed_seconds": 13.973907199993846
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_201\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 84,
+        "hidden_size": 1280,
+        "storage_bytes": 1388592512,
+        "estimated_storage_bytes": 1496304230,
+        "elapsed_seconds": 26.79079630000342
+      }
+    },
+    "esm1b_650m_prot_1001": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 1451,
+        "hidden_size": 1280,
+        "storage_bytes": 119421456528,
+        "estimated_storage_bytes": 128715949670,
+        "elapsed_seconds": 1574.2040025000024
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 857,
+        "hidden_size": 1280,
+        "storage_bytes": 70501265392,
+        "estimated_storage_bytes": 75988332748,
+        "elapsed_seconds": 925.4971384999953
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 381,
+        "hidden_size": 1280,
+        "storage_bytes": 31363058096,
+        "estimated_storage_bytes": 33804020736,
+        "elapsed_seconds": 415.1501122999907
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 44,
+        "hidden_size": 1280,
+        "storage_bytes": 3617429440,
+        "estimated_storage_bytes": 3898970726,
+        "elapsed_seconds": 43.78107340000861
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 92,
+        "hidden_size": 1280,
+        "storage_bytes": 7574474368,
+        "estimated_storage_bytes": 8163989913,
+        "elapsed_seconds": 103.10086349998892
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_1001\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 84,
+        "hidden_size": 1280,
+        "storage_bytes": 6859224512,
+        "estimated_storage_bytes": 7393069670,
+        "elapsed_seconds": 95.29661350000242
+      }
+    }
+  },
+  "updated_at": "2026-11-19T16:19:39.349743+00:00",
+  "index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\token_embedding_cache_index.json"
+}

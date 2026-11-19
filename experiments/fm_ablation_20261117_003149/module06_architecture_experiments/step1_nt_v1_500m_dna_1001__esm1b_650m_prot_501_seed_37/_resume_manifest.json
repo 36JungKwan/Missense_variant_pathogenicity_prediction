@@ -40,7 +40,8 @@
     },
     "embedding_representation": "ref_alt_concat",
     "input_data_signature": {
-      "token_batch_size": 64
+      "token_batch_size": 64,
+      "window_cache": "variant_centered_33_token_v1"
     },
     "pipeline_config": {
       "batch_size": 256,
@@ -66,22 +67,22 @@
       "sequence_length": 501
     },
     "step1_nt_v1_500m_dna_1001__esm1b_650m_prot_501_seed_37_config": {
-      "attention_dropout": 0.09245839484800474,
-      "dropout": 0.27733010051969553,
+      "attention_dropout": 0.18776012701077605,
+      "dropout": 0.1955626033738947,
       "early_stop_patience": 6,
-      "feature_dropout": 0.21563057108849548,
+      "feature_dropout": 0.2507543060224074,
       "ffn_multiplier": 4,
       "k_radius": 16,
-      "learning_rate": 1.0689751565977947e-05,
+      "learning_rate": 0.00012206472463506827,
       "lr_factor": 0.5,
       "lr_patience": 3,
       "max_epochs": 30,
       "model_dim": 512,
-      "num_heads": 4,
+      "num_heads": 8,
       "num_layers": 3,
       "pooling": "mean",
       "seed": 37,
-      "weight_decay": 0.00039841905944346893
+      "weight_decay": 3.380881049679085e-06
     },
     "target_configs": [
       {
@@ -110,7 +111,7 @@
     ],
     "variant": "ref_alt_concat_window_33_fixed_hparams"
   },
-  "config_sha256": "0bfac9afc9e75b6ed17a8e8b914fe56b22f9773acb81542263892822512443e9",
+  "config_sha256": "26b7e8d6a8e2c7efdc8a3fbce90b9987a0e428527e185ea503dbd5ee5fba775f",
   "stage": "module06_step1_nt_v1_500m_dna_1001__esm1b_650m_prot_501_seed_37",
   "version": 1
 }

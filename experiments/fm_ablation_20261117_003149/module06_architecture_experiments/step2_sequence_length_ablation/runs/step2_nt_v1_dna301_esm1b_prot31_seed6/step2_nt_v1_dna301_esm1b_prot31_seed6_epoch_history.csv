@@ -1,0 +1,2 @@
+Target_Config,Architecture,Variant,Epoch,Train_Loss,Val_Loss,Val_MCC,Val_Threshold,Val_AUROC,Val_AUPRC,Learning_Rate
+B_with_geometry,CrossAttention_ThreeModalities_FM_SequenceLength,ref_alt_concat_window_33_sequence_length_ablation,1,0.3476786519311207,0.18312884466439153,0.786070932908348,0.603335440158844,0.9664,0.8958,0.00012206472463506827

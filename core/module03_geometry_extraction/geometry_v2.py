@@ -39,6 +39,7 @@ class GeometryV2Config:
     # should use a separate root so their normalized artifacts never collide.
     geometry_root: str = "geometry_v2"
     normalization_root: str = "normalization_artifacts_v2"
+    index_root: str = "faiss_indexes_v2"
 
 
 def _embedding_path(base_dir, split, config_id, embedding_dir=None):
@@ -54,8 +55,8 @@ def _norm_output_path(base_dir, context, split, config_id, geometry_root="geomet
     return f"{base_dir}/{geometry_root}/{context}/{split}/{config_id}_geom_v2_norm.parquet"
 
 
-def _index_path(base_dir, context, config_id):
-    return f"{base_dir}/faiss_indexes_v2/{context}/{config_id}.index"
+def _index_path(base_dir, context, config_id, index_root="faiss_indexes_v2"):
+    return f"{base_dir}/{index_root}/{context}/{config_id}.index"
 
 
 def _artifact_dir(base_dir, context, normalization_root="normalization_artifacts_v2"):
@@ -96,7 +97,7 @@ def _extract_raw_geometry(calculator, data, metadata, e_ref, e_alt, exclude_self
 
 
 def _build_context_index(config: GeometryV2Config, context: str, config_id: str):
-    path = _index_path(config.base_dir, context, config_id)
+    path = _index_path(config.base_dir, context, config_id, config.index_root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     calculator = LatentGeometryCalculator(k_neighbors=config.k_neighbors, epsilon=config.epsilon)
     if config.resume and os.path.exists(path):

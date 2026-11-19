@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 from core.module05v2_fusion_classifier.evaluator_profiler import FusionEvaluatorProfiler
@@ -44,6 +45,62 @@ PROFILE_METRIC_COLUMNS = (
     "E2E_Param_Mem_MB",
     "Max_Peak_VRAM_MB",
 )
+
+
+class _TokenOnlyPlaceholderDataset(Dataset):
+    """Keep Module 5 metadata/features while supplying unused pooled placeholders."""
+
+    def __init__(self, base_dataset):
+        self.base_dataset = base_dataset
+        self.v_dna_tensor = torch.zeros((len(base_dataset), 1), dtype=torch.float32)
+        self.v_prot_tensor = torch.zeros((len(base_dataset), 1), dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getattr__(self, name):
+        if name == "base_dataset":
+            raise AttributeError(name)
+        return getattr(self.base_dataset, name)
+
+    def __getitem__(self, index):
+        sample = dict(self.base_dataset[index])
+        sample["v_dna"] = self.v_dna_tensor[index]
+        sample["v_prot"] = self.v_prot_tensor[index]
+        return sample
+
+
+def _architecture_loader(
+    pipeline, context, target, split_name, pooling, dna_model, protein_model,
+    is_train, geometry_context, seed, embedding_representation,
+):
+    """Build a pooled or token-only loader with a consistent Module 6 batch API."""
+    token_only = bool(context.get("token_only", False))
+    active_modalities = list(target["active_modalities"])
+    if token_only:
+        active_modalities = [
+            modality for modality in active_modalities
+            if str(modality).lower() not in {"dna", "prot"}
+        ]
+    loader = pipeline._get_dataloader(
+        split_name, pooling, dna_model["name"], protein_model["name"],
+        active_modalities, is_train, target.get("geom_feature_names"),
+        geometry_context, seed, embedding_representation,
+        geometry_dna_name=target.get("geometry_dna_name"),
+        geometry_protein_name=target.get("geometry_protein_name"),
+        load_pooled_embeddings=not token_only,
+    )
+    if token_only:
+        dataset = _TokenOnlyPlaceholderDataset(loader.dataset)
+        loader = DataLoader(
+            dataset,
+            batch_size=loader.batch_size,
+            shuffle=is_train,
+            num_workers=0,
+            pin_memory=loader.pin_memory,
+            generator=loader.generator,
+        )
+    return loader
 
 
 
@@ -273,12 +330,18 @@ def run_architecture_experiment(
     display = display_fn or print
     window_radius = (
         int(config["k_radius"])
-        if source == "fm_ablation_step1"
-        and variant == "ref_alt_concat_window_33_fixed_hparams"
+        if (
+            source == "fm_ablation_step1"
+            and variant == "ref_alt_concat_window_33_fixed_hparams"
+        ) or (
+            source == "fm_ablation_step2"
+            and variant == "ref_alt_concat_window_33_sequence_length_ablation"
+        )
         else None
     )
 
-    stage_dir = Path(pipeline.batch_run_dir) / "module06_architecture_experiments" / experiment_key
+    stage_root = Path(context.get("stage_root", Path(pipeline.batch_run_dir) / "module06_architecture_experiments"))
+    stage_dir = stage_root / experiment_key
     if trial_name is not None:
         stage_dir = stage_dir / "trials" / str(trial_name)
     checkpoint_root = stage_dir / "checkpoints"
@@ -327,12 +390,9 @@ def run_architecture_experiment(
         _seed_everything(int(config["seed"]))
         loader_start = time.perf_counter()
         print(f"[{architecture}] Preparing train dataset and token-cache loader...")
-        train_loader = pipeline._get_dataloader(
-            "train3", "center", dna_model["name"], protein_model["name"],
-            target["active_modalities"], True, target.get("geom_feature_names"),
-            "train3", int(config["seed"]), embedding_representation,
-            geometry_dna_name=target.get("geometry_dna_name"),
-            geometry_protein_name=target.get("geometry_protein_name"),
+        train_loader = _architecture_loader(
+            pipeline, context, target, "train3", "center", dna_model, protein_model,
+            True, "train3", int(config["seed"]), embedding_representation,
         )
         train_loader = _attach_token_cache(
             train_loader, context, "train3", is_train=True,
@@ -345,12 +405,9 @@ def run_architecture_experiment(
         if not (window_radius is not None and reuse_completed_model):
             loader_start = time.perf_counter()
             print(f"[{architecture}] Preparing validation dataset and token-cache loader...")
-            val_loader = pipeline._get_dataloader(
-                "val", "center", dna_model["name"], protein_model["name"],
-                target["active_modalities"], False, target.get("geom_feature_names"),
-                "train3", int(config["seed"]), embedding_representation,
-                geometry_dna_name=target.get("geometry_dna_name"),
-                geometry_protein_name=target.get("geometry_protein_name"),
+            val_loader = _architecture_loader(
+                pipeline, context, target, "val", "center", dna_model, protein_model,
+                False, "train3", int(config["seed"]), embedding_representation,
             )
             val_loader = _attach_token_cache(val_loader, context, "val", window_radius=window_radius)
             print(
@@ -601,13 +658,15 @@ def run_architecture_experiment(
                     # Keep the optional geom argument in its positional slot before
                     # the six token tensors consumed by token-aware models.
                     dummy_inputs.append(torch.zeros((1, 0), device=device))
+                profile_window = 2 * int(config.get("k_radius", 0)) + 1
+                profile_center = int(config.get("k_radius", 0))
                 dummy_inputs.extend([
-                    torch.zeros((1, 2, 8, dimensions["token_dna"]), device=device),
-                    torch.ones((1, 2, 8), dtype=torch.bool, device=device),
-                    torch.zeros((1, 2), dtype=torch.long, device=device),
-                    torch.zeros((1, 2, 8, dimensions["token_protein"]), device=device),
-                    torch.ones((1, 2, 8), dtype=torch.bool, device=device),
-                    torch.zeros((1, 2), dtype=torch.long, device=device),
+                    torch.zeros((1, 2, profile_window, dimensions["token_dna"]), device=device),
+                    torch.ones((1, 2, profile_window), dtype=torch.bool, device=device),
+                    torch.full((1, 2), profile_center, dtype=torch.long, device=device),
+                    torch.zeros((1, 2, profile_window, dimensions["token_protein"]), device=device),
+                    torch.ones((1, 2, profile_window), dtype=torch.bool, device=device),
+                    torch.full((1, 2), profile_center, dtype=torch.long, device=device),
                 ])
             profiler.profile_pytorch_fusion(model, tuple(dummy_inputs))
     
@@ -649,12 +708,10 @@ def run_architecture_experiment(
                 ):
                     continue
                 print(f"[{architecture}] Evaluating test set: {target_name} / {dataset_name}")
-                test_loader = pipeline._get_dataloader(
-                    dataset_cfg["test"], "center", dna_model["name"], protein_model["name"],
-                    target["active_modalities"], False, target.get("geom_feature_names"),
-                    dataset_cfg["train"], int(config["seed"]), embedding_representation,
-                    geometry_dna_name=target.get("geometry_dna_name"),
-                    geometry_protein_name=target.get("geometry_protein_name"),
+                test_loader = _architecture_loader(
+                    pipeline, context, target, dataset_cfg["test"], "center", dna_model,
+                    protein_model, False, dataset_cfg["train"], int(config["seed"]),
+                    embedding_representation,
                 )
                 test_loader = _attach_token_cache(
                     test_loader, context, dataset_cfg["test"], window_radius=window_radius

@@ -1,0 +1,39 @@
+{
+  "best_trial": 16,
+  "optuna_objective_mean_val_mcc": 0.8175799999999999,
+  "optimization_seed_list": [
+    17,
+    37,
+    42,
+    73,
+    97
+  ],
+  "reported_seed_list": [
+    5,
+    6,
+    7,
+    37,
+    42
+  ],
+  "mean_val_mcc_5_seeds": 0.82086,
+  "std_val_mcc_5_seeds": 0.00436611955860122,
+  "reported_mean_val_mcc": 0.82086,
+  "params": {
+    "k_radius": 16,
+    "model_dim": 512,
+    "num_heads": 8,
+    "num_layers": 3,
+    "ffn_multiplier": 4,
+    "pooling": "mean",
+    "dropout": 0.1955626033738947,
+    "attention_dropout": 0.18776012701077605,
+    "feature_dropout": 0.2507543060224074,
+    "max_epochs": 30,
+    "learning_rate": 0.00012206472463506827,
+    "weight_decay": 3.380881049679085e-06,
+    "early_stop_patience": 6,
+    "lr_factor": 0.5,
+    "lr_patience": 3,
+    "seed": 42
+  }
+}

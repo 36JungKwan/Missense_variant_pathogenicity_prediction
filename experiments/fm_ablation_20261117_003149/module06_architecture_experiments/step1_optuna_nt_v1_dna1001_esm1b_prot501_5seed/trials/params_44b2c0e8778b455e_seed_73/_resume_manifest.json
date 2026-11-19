@@ -1,0 +1,117 @@
+{
+  "config": {
+    "architecture": "cross_attention_3modal_ref_alt_concat_window33_fm_pair_ablation",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_1001",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_1001",
+      "ref_col": "ref_seq_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "ref_alt_concat",
+    "input_data_signature": {
+      "token_batch_size": 64,
+      "window_cache": "variant_centered_33_token_v1"
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 73,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 8
+    },
+    "pooling": "center",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_501",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_501",
+      "ref_col": "prot_ref_seq_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "step1_optuna_nt_v1_dna1001_esm1b_prot501_5seed_config": {
+      "attention_dropout": 0.018326972727036706,
+      "dropout": 0.22997555293324523,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.3012609069359317,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.0003484601476902924,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 73,
+      "weight_decay": 0.14126186781709574
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm2_650m_prot_501",
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "ref_alt_concat_window_33_fixed_hparams"
+  },
+  "config_sha256": "a74b7f81094704e99218e01c60d03beb87ae6db514eef84460d29de029800662",
+  "stage": "module06_step1_optuna_nt_v1_dna1001_esm1b_prot501_5seed",
+  "version": 1
+}
