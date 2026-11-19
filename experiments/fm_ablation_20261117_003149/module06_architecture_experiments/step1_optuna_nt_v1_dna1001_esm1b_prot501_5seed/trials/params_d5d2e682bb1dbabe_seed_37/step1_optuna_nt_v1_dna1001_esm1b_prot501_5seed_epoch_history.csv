@@ -1,0 +1,4 @@
+Target_Config,Architecture,Variant,Epoch,Train_Loss,Val_Loss,Val_MCC,Val_Threshold,Val_AUROC,Val_AUPRC,Learning_Rate
+B_with_geometry,CrossAttention_ThreeModalities_FM_Pair_Optuna,ref_alt_concat_window_33_fixed_hparams,1,0.3316354968478169,0.17701938378787554,0.7915161224759115,0.5326442718505859,0.965,0.8991,4.1255153032271714e-05
+B_with_geometry,CrossAttention_ThreeModalities_FM_Pair_Optuna,ref_alt_concat_window_33_fixed_hparams,2,0.22056600206969154,0.15369733722375975,0.8155735806753925,0.3217892050743103,0.9729,0.9184,4.1255153032271714e-05
+B_with_geometry,CrossAttention_ThreeModalities_FM_Pair_Optuna,ref_alt_concat_window_33_fixed_hparams,3,0.2015013068205568,0.1833745739227311,0.8133428687445851,0.7210982441902161,0.9734,0.919,4.1255153032271714e-05
