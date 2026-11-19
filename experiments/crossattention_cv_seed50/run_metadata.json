@@ -1,0 +1,83 @@
+{
+  "seed": 50,
+  "source_run": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\reproduction_ablations_20261101_111011",
+  "output_dir": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\crossattention_cv_seed50",
+  "networks": [
+    "PyTorch_CrossAttn",
+    "Hybrid_CrossAttn_XGBoost"
+  ],
+  "cv": "3-fold shuffled StratifiedKFold on variants, separately per train split",
+  "cv_seed": 50,
+  "selection_metric": "mean fold MCC at threshold 0.5",
+  "threshold_source": "independent val split",
+  "pytorch_candidates": [
+    {
+      "name": "baseline",
+      "lr": 0.0001,
+      "weight_decay": 0.001,
+      "dropout": 0.2
+    },
+    {
+      "name": "higher_lr",
+      "lr": 0.0003,
+      "weight_decay": 0.001,
+      "dropout": 0.2
+    },
+    {
+      "name": "strong_regularization",
+      "lr": 0.0001,
+      "weight_decay": 0.01,
+      "dropout": 0.35
+    },
+    {
+      "name": "lower_lr",
+      "lr": 5e-05,
+      "weight_decay": 0.001,
+      "dropout": 0.1
+    }
+  ],
+  "hybrid_candidates": [
+    {
+      "name": "baseline",
+      "xgb_max_depth": 6,
+      "xgb_learning_rate": 0.1,
+      "xgb_n_estimators": 500,
+      "xgb_min_child_weight": 1,
+      "xgb_subsample": 1.0,
+      "xgb_colsample_bytree": 1.0,
+      "xgb_reg_lambda": 1.0
+    },
+    {
+      "name": "shallow_regularized",
+      "xgb_max_depth": 4,
+      "xgb_learning_rate": 0.05,
+      "xgb_n_estimators": 700,
+      "xgb_min_child_weight": 3,
+      "xgb_subsample": 0.8,
+      "xgb_colsample_bytree": 0.8,
+      "xgb_reg_lambda": 3.0
+    },
+    {
+      "name": "deeper_regularized",
+      "xgb_max_depth": 8,
+      "xgb_learning_rate": 0.05,
+      "xgb_n_estimators": 400,
+      "xgb_min_child_weight": 5,
+      "xgb_subsample": 0.8,
+      "xgb_colsample_bytree": 0.8,
+      "xgb_reg_lambda": 5.0
+    },
+    {
+      "name": "moderate",
+      "xgb_max_depth": 6,
+      "xgb_learning_rate": 0.05,
+      "xgb_n_estimators": 700,
+      "xgb_min_child_weight": 2,
+      "xgb_subsample": 0.9,
+      "xgb_colsample_bytree": 0.9,
+      "xgb_reg_lambda": 2.0
+    }
+  ],
+  "final_fit": "PyTorch uses median best epoch across CV folds; hybrid uses 2 feature-extractor epochs and median CV best XGBoost tree count.",
+  "final_hybrid_profile_note": "For the completed run, only Total_Fit_Seconds was captured for final hybrid fits; component timings are blank in fit_profiling.csv."
+}

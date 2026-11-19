@@ -1,0 +1,2 @@
+Optuna_Trial,Trial_ID,State,Objective_Name,Objective_Value,Val_MCC_A,Val_MCC_B,Hyperparameters
+0,optuna_0000,COMPLETE,validation_mcc_on_B_with_geometry,0.817,,0.817,"{""attention_dropout"": 0.0924, ""dropout"": 0.27, ""feature_dropout"": 0.215, ""ffn_multiplier"": 4, ""k_radius"": 16, ""learning_rate"": 1.1e-05, ""model_dim"": 512, ""num_heads"": 4, ""num_layers"": 3, ""pooling"": ""mean"", ""weight_decay"": 0.000398}"

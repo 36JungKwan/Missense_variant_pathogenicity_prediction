@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
-from itertools import product
+import hashlib
 import os
+import re
 import random
+import tempfile
 import time
 from pathlib import Path
 
@@ -12,12 +14,35 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from tqdm.auto import tqdm
 
 from core.module05v2_fusion_classifier.evaluator_profiler import FusionEvaluatorProfiler
+from core.module05v2_fusion_classifier.optuna_search import (
+    optuna_trial_plan,
+    tell_trial,
+)
 from core.module05v2_fusion_classifier.resume_utils import (
     ensure_stage_signature,
+    replace_file_with_retry,
     save_progress_csv,
     upsert_record,
+)
+
+PROFILE_METRIC_COLUMNS = (
+    "FM_GFLOPs/Sample",
+    "FM_Latency_ms/Sample",
+    "Geom_GFLOPs/Sample",
+    "Geom_Latency_ms/Sample",
+    "Classifier_GFLOPs/Sample",
+    "Classifier_Latency_ms/Sample",
+    "Classifier_Total_Params",
+    "Classifier_Param_Mem_MB",
+    "Classifier_Peak_VRAM_MB",
+    "E2E_GFLOPs/Sample",
+    "E2E_Latency_ms/Sample",
+    "E2E_Total_Params",
+    "E2E_Param_Mem_MB",
+    "Max_Peak_VRAM_MB",
 )
 
 
@@ -63,9 +88,19 @@ def _cpu_state_dict(module):
 
 def _atomic_torch_save(payload, destination):
     destination = Path(destination)
-    temporary = destination.with_name(destination.name + ".tmp")
-    torch.save(payload, temporary)
-    os.replace(temporary, destination)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f"{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        torch.save(payload, temporary)
+        replace_file_with_retry(temporary, destination)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _move(batch, key, device, required=False):
@@ -76,27 +111,81 @@ def _move(batch, key, device, required=False):
 
 
 def _forward(model, batch, device):
-    return model(
+    inputs = [
         _move(batch, "v_dna", device, required=True),
         _move(batch, "v_prot", device, required=True),
         _move(batch, "bio_features", device, required=True),
         _move(batch, "geom_features", device),
+    ]
+    # Token-level Module 6 models opt into these additional inputs. Existing
+    # pooled-embedding architectures retain their original four-argument API.
+    for key in (
+        "token_dna", "token_dna_mask", "token_dna_variant_index",
+        "token_protein", "token_protein_mask", "token_protein_variant_index",
+    ):
+        if key in batch:
+            inputs.append(_move(batch, key, device))
+    return model(*inputs)
+
+
+def _attach_token_cache(loader, context, split_name, is_train=False, window_radius=None):
+    """Wrap a pooled Module 5 loader with lazy token-cache lookups when requested."""
+    token_index = context.get("token_embedding_cache_index")
+    if token_index is None:
+        return loader
+    if window_radius is not None:
+        from core.module06_architecture_experiments.window_token_cache import (
+            add_window_cache_to_loader,
+        )
+        return add_window_cache_to_loader(
+            loader=loader,
+            token_index=token_index,
+            split_name=split_name,
+            dna_model_name=context["DNA_MODEL"]["name"],
+            protein_model_name=context["PROTEIN_MODEL"]["name"],
+            is_train=is_train,
+            batch_size=context.get("token_batch_size"),
+            radius=window_radius,
+        )
+    from core.module06_architecture_experiments.token_topk_experiment import (
+        add_token_cache_to_loader,
+    )
+    return add_token_cache_to_loader(
+        loader=loader,
+        token_index=token_index,
+        split_name=split_name,
+        dna_model_name=context["DNA_MODEL"]["name"],
+        protein_model_name=context["PROTEIN_MODEL"]["name"],
+        is_train=is_train,
+        batch_size=context.get("token_batch_size"),
     )
 
 
-def _collect(model, loader, device, criterion=None):
+def _collect(model, loader, device, criterion=None, profiler=None, progress_desc=None):
     model.eval()
     labels, probabilities = [], []
     loss_total, n_total = 0.0, 0
+    if profiler is not None:
+        profiler.reset_memory_stats()
+    batches = (
+        tqdm(loader, desc=progress_desc, unit="batch", leave=False)
+        if progress_desc else loader
+    )
     with torch.no_grad():
-        for batch in loader:
+        for batch in batches:
+            if profiler is not None:
+                profiler.tic_inference()
             logits = _forward(model, batch, device)
-            y = _move(batch, "label", device, required=True)
+            if profiler is not None:
+                profiler.toc_inference()
+            y = _move(batch, "label", device, required=True).reshape_as(logits)
             if criterion is not None:
                 loss_total += float(criterion(logits, y).item()) * int(y.shape[0])
                 n_total += int(y.shape[0])
             labels.extend(y.reshape(-1).cpu().numpy())
             probabilities.extend(torch.sigmoid(logits).reshape(-1).cpu().numpy())
+    if profiler is not None:
+        profiler.finalize_fusion_inference_profiling(len(labels))
     mean_loss = loss_total / max(n_total, 1) if criterion is not None else np.nan
     return mean_loss, np.asarray(labels, dtype=np.int32), np.asarray(probabilities, dtype=np.float32)
 
@@ -108,9 +197,64 @@ def _metrics(pipeline, labels, probabilities):
     return float(threshold), float(mcc), values
 
 
+def _base_geometry_model_name(model_name):
+    return re.sub(r"_(?:dna|prot)_\d+$", "", str(model_name))
+
+
+def _get_test_profile_metrics(profiler, dna_model_name, protein_model_name, active_modalities, split_name):
+    """Combine FM, geometry, and measured classifier profiling for one test split."""
+    stats = profiler.get_e2e_profiling(
+        dna_model_name=dna_model_name,
+        prot_model_name=protein_model_name,
+        active_modalities=active_modalities,
+        split_name=split_name,
+        pooling="center",
+    )
+
+    # Geometry profiling stores family-level keys (for example
+    # ``nt_v1_500m_center``), whereas embedding files include sequence length.
+    # Try the full key first, then map the model name to its family key.
+    geom_data = profiler._load_profile_json(profiler.geom_profile_json, "geometry", required=False)
+    active_mods = {str(mod).lower() for mod in (active_modalities or [])}
+    geom_stats = []
+    if "geom" in active_mods:
+        for model_name in (dna_model_name, protein_model_name):
+            exact_key = f"{model_name}_center"
+            item = profiler._resolve_nested_stats(geom_data, exact_key, split_name)
+            if not item:
+                family_key = f"{_base_geometry_model_name(model_name)}_center"
+                item = profiler._resolve_nested_stats(geom_data, family_key, split_name)
+            geom_stats.append(profiler._normalize_geom_stats(item))
+
+    geom_gflops = sum(float(item.get("gflops_per_sample", 0.0)) for item in geom_stats)
+    geom_latency = sum(float(item.get("inference_time_ms", 0.0)) for item in geom_stats)
+    geom_peak = max((float(item.get("peak_memory_mb", 0.0)) for item in geom_stats), default=0.0)
+    stats["Geom_GFLOPs/Sample"] = round(geom_gflops, 4)
+    stats["Geom_Latency_ms/Sample"] = round(geom_latency, 2)
+    stats["E2E_GFLOPs/Sample"] = round(
+        float(stats.get("FM_GFLOPs/Sample", 0.0))
+        + geom_gflops
+        + float(stats.get("Classifier_GFLOPs/Sample", 0.0)),
+        4,
+    )
+    stats["E2E_Latency_ms/Sample"] = round(
+        float(stats.get("FM_Latency_ms/Sample", 0.0))
+        + geom_latency
+        + float(stats.get("Classifier_Latency_ms/Sample", 0.0)),
+        2,
+    )
+    stats["Max_Peak_VRAM_MB"] = round(max(
+        float(stats.get("Max_Peak_VRAM_MB", 0.0)), geom_peak
+    ), 2)
+    # Classifier_XGB_Model_Mem_MB is intentionally omitted: Module 6 models
+    # handled by this runner are PyTorch classifiers, not XGBoost.
+    return {key: stats.get(key, np.nan) for key in PROFILE_METRIC_COLUMNS}
+
+
 def run_architecture_experiment(
     context, experiment_config, model_builder, architecture, variant, experiment_key,
     source, display_fn=None, manifest_architecture=None, trial_name=None,
+    embedding_representation="delta", evaluate_test=True,
 ):
     """Run one architecture on configs A/B and the configured test datasets.
 
@@ -127,6 +271,12 @@ def run_architecture_experiment(
     device = torch.device(context.get("DEVICE", pipeline.device))
     config = dict(experiment_config)
     display = display_fn or print
+    window_radius = (
+        int(config["k_radius"])
+        if source == "fm_ablation_step1"
+        and variant == "ref_alt_concat_window_33_fixed_hparams"
+        else None
+    )
 
     stage_dir = Path(pipeline.batch_run_dir) / "module06_architecture_experiments" / experiment_key
     if trial_name is not None:
@@ -147,8 +297,11 @@ def run_architecture_experiment(
         "dna_model": dna_model,
         "protein_model": protein_model,
         "pooling": "center",
+        "embedding_representation": embedding_representation,
         "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
     }
+    if context.get("input_data_signature") is not None:
+        signature["input_data_signature"] = context["input_data_signature"]
     if experiment_key != "film":
         signature["variant"] = variant
     ensure_stage_signature(stage_dir, f"module06_{experiment_key}", signature)
@@ -167,27 +320,57 @@ def run_architecture_experiment(
         validation_row = next(
             (row for row in validation_rows if str(row.get("Target_Config")) == target_name), None
         )
+        reuse_completed_model = validation_row is not None and best_checkpoint.exists()
 
         # Seed before constructing the model so its initial weights match the
         # recorded seed. On resume, the saved RNG state is restored afterward.
         _seed_everything(int(config["seed"]))
+        loader_start = time.perf_counter()
+        print(f"[{architecture}] Preparing train dataset and token-cache loader...")
         train_loader = pipeline._get_dataloader(
             "train3", "center", dna_model["name"], protein_model["name"],
             target["active_modalities"], True, target.get("geom_feature_names"),
-            "train3", int(config["seed"]),
+            "train3", int(config["seed"]), embedding_representation,
+            geometry_dna_name=target.get("geometry_dna_name"),
+            geometry_protein_name=target.get("geometry_protein_name"),
         )
-        val_loader = pipeline._get_dataloader(
-            "val", "center", dna_model["name"], protein_model["name"],
-            target["active_modalities"], False, target.get("geom_feature_names"),
-            "train3", int(config["seed"]),
+        train_loader = _attach_token_cache(
+            train_loader, context, "train3", is_train=True,
+            window_radius=None if reuse_completed_model else window_radius,
         )
+        print(
+            f"[{architecture}] Train loader ready: {len(train_loader)} batches "
+            f"in {time.perf_counter() - loader_start:.1f}s"
+        )
+        if not (window_radius is not None and reuse_completed_model):
+            loader_start = time.perf_counter()
+            print(f"[{architecture}] Preparing validation dataset and token-cache loader...")
+            val_loader = pipeline._get_dataloader(
+                "val", "center", dna_model["name"], protein_model["name"],
+                target["active_modalities"], False, target.get("geom_feature_names"),
+                "train3", int(config["seed"]), embedding_representation,
+                geometry_dna_name=target.get("geometry_dna_name"),
+                geometry_protein_name=target.get("geometry_protein_name"),
+            )
+            val_loader = _attach_token_cache(val_loader, context, "val", window_radius=window_radius)
+            print(
+                f"[{architecture}] Validation loader ready: {len(val_loader)} batches "
+                f"in {time.perf_counter() - loader_start:.1f}s"
+            )
         train_dataset = train_loader.dataset
         dimensions = {
             "dna": int(train_dataset.v_dna_tensor.shape[1]),
             "protein": int(train_dataset.v_prot_tensor.shape[1]),
             "bio": int(train_dataset.bio_tensor.shape[1]),
             "geometry": int(train_dataset.geom_tensor.shape[1]) if train_dataset.has_geom else 0,
+            "active_modalities": list(target["active_modalities"]),
         }
+        if context.get("token_embedding_cache_index") is not None:
+            dimensions.update({
+                "token_dna": int(train_loader.dataset.token_hidden_sizes["dna"]),
+                "token_protein": int(train_loader.dataset.token_hidden_sizes["protein"]),
+                "token_cache": True,
+            })
         biological_dim = dimensions["bio"] + dimensions["geometry"]
         model = model_builder(dimensions, config).to(device)
         parameter_count = sum(parameter.numel() for parameter in model.parameters())
@@ -246,22 +429,45 @@ def run_architecture_experiment(
 
             segment_start = time.perf_counter()
             if not training_complete:
-                for epoch in range(start_epoch, int(config["max_epochs"])):
+                epoch_progress = tqdm(
+                    range(start_epoch, int(config["max_epochs"])),
+                    total=int(config["max_epochs"]),
+                    initial=start_epoch,
+                    desc=f"{architecture} | {variant} | {target_name}",
+                    unit="epoch",
+                    leave=True,
+                )
+                for epoch in epoch_progress:
+                    epoch_start = time.perf_counter()
                     model.train()
                     train_loss_sum, train_count = 0.0, 0
-                    for batch in train_loader:
+                    train_batches = tqdm(
+                        train_loader,
+                        desc=f"Train epoch {epoch + 1}/{config['max_epochs']}",
+                        unit="batch",
+                        leave=False,
+                    )
+                    for batch in train_batches:
                         optimizer.zero_grad(set_to_none=True)
                         logits = _forward(model, batch, device)
-                        labels = _move(batch, "label", device, required=True)
+                        labels = _move(batch, "label", device, required=True).reshape_as(logits)
                         loss = criterion(logits, labels)
                         loss.backward()
                         optimizer.step()
+                        train_batches.set_postfix(loss=f"{loss.item():.4f}")
                         count = int(labels.shape[0])
                         train_loss_sum += float(loss.item()) * count
                         train_count += count
 
                     train_loss = train_loss_sum / max(train_count, 1)
-                    val_loss, y_val, p_val = _collect(model, val_loader, device, criterion)
+                    validation_start = time.perf_counter()
+                    val_loss, y_val, p_val = _collect(
+                        model,
+                        val_loader,
+                        device,
+                        criterion,
+                        progress_desc=f"Validation epoch {epoch + 1}/{config['max_epochs']}",
+                    )
                     threshold, val_mcc, val_metrics = _metrics(pipeline, y_val, p_val)
                     scheduler.step(val_mcc)
                     epoch_row = {
@@ -315,10 +521,18 @@ def run_architecture_experiment(
                     if best_model_state is not None:
                         _atomic_torch_save(best_model_state, best_checkpoint)
                     save_progress_csv(history_rows, history_path)
-                    print(
-                        f"[{architecture}] {target_name} epoch {epoch + 1}/{config['max_epochs']} "
-                        f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-                        f"val_MCC={val_mcc:.4f} threshold={threshold:.4f}"
+                    if window_radius is not None:
+                        print(
+                            f"[Epoch {epoch + 1}] train={validation_start - epoch_start:.1f}s; "
+                            f"total including validation and checkpoint="
+                            f"{time.perf_counter() - epoch_start:.1f}s"
+                        )
+                    epoch_progress.set_postfix(
+                        train_loss=f"{train_loss:.4f}",
+                        val_loss=f"{val_loss:.4f}",
+                        val_MCC=f"{val_mcc:.4f}",
+                        threshold=f"{threshold:.4f}",
+                        best_epoch=best_epoch,
                     )
                     if training_complete:
                         break
@@ -329,7 +543,9 @@ def run_architecture_experiment(
                 )
             _atomic_torch_save(best_model_state, best_checkpoint)
             model.load_state_dict(torch.load(best_checkpoint, map_location=device, weights_only=True))
-            _, y_val, p_val = _collect(model, val_loader, device)
+            _, y_val, p_val = _collect(
+                model, val_loader, device, progress_desc="Final validation"
+            )
             threshold, val_mcc, val_metrics = _metrics(pipeline, y_val, p_val)
             validation_row = {
                 "Run_ID": Path(pipeline.batch_run_dir).name,
@@ -343,6 +559,7 @@ def run_architecture_experiment(
                 "Network": architecture,
                 "Architecture": architecture,
                 "Variant": variant,
+                "Input_Representation": embedding_representation,
                 "Classifier": "Residual_MLP",
                 "Feature_Set": "DNA+Protein+Bio+Geometry" if dimensions["geometry"] else "DNA+Protein+Bio",
                 "Source": source,
@@ -364,78 +581,156 @@ def run_architecture_experiment(
             model.load_state_dict(torch.load(best_checkpoint, map_location=device, weights_only=True))
             print(f"[RESUME] Reusing {architecture} checkpoint for {target_name}")
 
-        threshold = float(validation_row["Decision_Threshold"])
-        for dataset_cfg in datasets:
-            dataset_name = str(dataset_cfg["name"])
-            if any(
-                str(row.get("Target_Config")) == target_name
-                and str(row.get("Dataset")) == dataset_name
-                for row in test_rows
-            ):
-                print(f"[{architecture}] Reusing saved test metrics: {target_name} / {dataset_name}")
-                continue
-            print(f"[{architecture}] Evaluating test set: {target_name} / {dataset_name}")
-            test_loader = pipeline._get_dataloader(
-                dataset_cfg["test"], "center", dna_model["name"], protein_model["name"],
-                target["active_modalities"], False, target.get("geom_feature_names"),
-                dataset_cfg["train"], int(config["seed"]),
+        if evaluate_test:
+            threshold = float(validation_row["Decision_Threshold"])
+            profiler = FusionEvaluatorProfiler(
+                tensorboard_dir=None,
+                fm_profile_json=getattr(pipeline, "fm_profile_json", None),
+                geom_profile_json=getattr(pipeline, "geom_profile_json", None),
+                device=device,
             )
-            _, y_test, p_test = _collect(model, test_loader, device)
-            y_pred = pipeline._threshold_predictions(p_test, threshold)
-            metrics = FusionEvaluatorProfiler.compute_metrics(y_test, p_test, y_pred)
-            test_row = {
-                "Run_ID": Path(pipeline.batch_run_dir).name,
-                "Branch": "DL",
-                "Evaluation_Split": "test",
-                "Target_Config": target_name,
-                "Ablation": target["ablation"],
-                "Dataset": dataset_name,
-                "Pooling": "center",
-                "DNA_Model": dna_model["name"],
-                "Prot_Model": protein_model["name"],
-                "Network": architecture,
-                "Architecture": architecture,
-                "Variant": variant,
-                "Classifier": "Residual_MLP",
-                "Feature_Set": "DNA+Protein+Bio+Geometry" if dimensions["geometry"] else "DNA+Protein+Bio",
-                "Source": source,
-                "Candidate_Level": "single_run",
-                "Seed": int(config["seed"]),
-                "N_Seeds": 1,
-                "Decision_Threshold": threshold,
-                "Best_Epoch": validation_row["Best_Epoch"],
-                "Fit_Seconds": validation_row["Fit_Seconds"],
-                "Val_MCC": validation_row["Val_MCC"],
-                "Parameters": parameter_count,
-                "Hyperparameters": json.dumps(config, sort_keys=True),
-                "Source_File": str(test_path),
-                **{
-                    f"Val_{key}": validation_row.get(f"Val_{key}", np.nan)
-                    for key in (
-                        "Accuracy", "Precision", "Recall", "Specificity",
-                        "F1_Score", "MCC", "AUROC", "AUPRC",
-                    )
-                },
-                **metrics,
-            }
-            prediction_rows.extend({
-                "Target_Config": target_name,
-                "Dataset": dataset_name,
-                "Variant_ID": str(variant_id),
-                "Label": int(label),
-                "Probability_Pathogenic": float(probability),
-                "Prediction": int(prediction),
-            } for variant_id, label, probability, prediction in zip(
-                test_loader.dataset.df["Variant_ID"].astype(str), y_test, p_test, y_pred
-            ))
-            save_progress_csv(prediction_rows, predictions_path)
-            test_rows = upsert_record(test_rows, test_row, ["Target_Config", "Dataset"])
-            save_progress_csv(test_rows, test_path)
-            print(
-                f"[{architecture}] Test complete: {target_name} / {dataset_name} "
-                f"MCC={metrics['MCC']:.4f} AUROC={metrics['AUROC']:.4f} "
-                f"AUPRC={metrics['AUPRC']:.4f}"
-            )
+            dummy_inputs = [
+                torch.zeros((1, dimensions["dna"]), device=device),
+                torch.zeros((1, dimensions["protein"]), device=device),
+                torch.zeros((1, dimensions["bio"]), device=device),
+            ]
+            if dimensions["geometry"]:
+                dummy_inputs.append(torch.zeros((1, dimensions["geometry"]), device=device))
+            if dimensions.get("token_cache"):
+                if not dimensions["geometry"]:
+                    # Keep the optional geom argument in its positional slot before
+                    # the six token tensors consumed by token-aware models.
+                    dummy_inputs.append(torch.zeros((1, 0), device=device))
+                dummy_inputs.extend([
+                    torch.zeros((1, 2, 8, dimensions["token_dna"]), device=device),
+                    torch.ones((1, 2, 8), dtype=torch.bool, device=device),
+                    torch.zeros((1, 2), dtype=torch.long, device=device),
+                    torch.zeros((1, 2, 8, dimensions["token_protein"]), device=device),
+                    torch.ones((1, 2, 8), dtype=torch.bool, device=device),
+                    torch.zeros((1, 2), dtype=torch.long, device=device),
+                ])
+            profiler.profile_pytorch_fusion(model, tuple(dummy_inputs))
+    
+            for dataset_cfg in datasets:
+                dataset_name = str(dataset_cfg["name"])
+                saved_test_row = next((
+                    row for row in test_rows
+                    if str(row.get("Target_Config")) == target_name
+                    and str(row.get("Dataset")) == dataset_name
+                ), None)
+                if saved_test_row is not None and all(
+                    column in saved_test_row and pd.notna(saved_test_row[column])
+                    for column in PROFILE_METRIC_COLUMNS
+                ):
+                    print(f"[{architecture}] Reusing saved test metrics: {target_name} / {dataset_name}")
+                    continue
+                if saved_test_row is not None:
+                    # Older Module 6 rows may have valid predictions/metrics but no
+                    # hardware columns. Re-evaluate from the saved checkpoint and
+                    # replace those rows without duplicating per-variant predictions.
+                    test_rows = [
+                        row for row in test_rows
+                        if not (
+                            str(row.get("Target_Config")) == target_name
+                            and str(row.get("Dataset")) == dataset_name
+                        )
+                    ]
+                    prediction_rows = [
+                        row for row in prediction_rows
+                        if not (
+                            str(row.get("Target_Config")) == target_name
+                            and str(row.get("Dataset")) == dataset_name
+                        )
+                    ]
+                if any(
+                    str(row.get("Target_Config")) == target_name
+                    and str(row.get("Dataset")) == dataset_name
+                    for row in test_rows
+                ):
+                    continue
+                print(f"[{architecture}] Evaluating test set: {target_name} / {dataset_name}")
+                test_loader = pipeline._get_dataloader(
+                    dataset_cfg["test"], "center", dna_model["name"], protein_model["name"],
+                    target["active_modalities"], False, target.get("geom_feature_names"),
+                    dataset_cfg["train"], int(config["seed"]), embedding_representation,
+                    geometry_dna_name=target.get("geometry_dna_name"),
+                    geometry_protein_name=target.get("geometry_protein_name"),
+                )
+                test_loader = _attach_token_cache(
+                    test_loader, context, dataset_cfg["test"], window_radius=window_radius
+                )
+                _, y_test, p_test = _collect(
+                    model,
+                    test_loader,
+                    device,
+                    profiler=profiler,
+                    progress_desc=f"Test {dataset_name}",
+                )
+                y_pred = pipeline._threshold_predictions(p_test, threshold)
+                metrics = FusionEvaluatorProfiler.compute_metrics(y_test, p_test, y_pred)
+                profile_metrics = _get_test_profile_metrics(
+                    profiler=profiler,
+                    dna_model_name=dna_model["name"],
+                    protein_model_name=protein_model["name"],
+                    active_modalities=target["active_modalities"],
+                    split_name=dataset_cfg["test"],
+                )
+                test_row = {
+                    "Run_ID": Path(pipeline.batch_run_dir).name,
+                    "Branch": "DL",
+                    "Evaluation_Split": "test",
+                    "Target_Config": target_name,
+                    "Ablation": target["ablation"],
+                    "Dataset": dataset_name,
+                    "Pooling": "center",
+                    "DNA_Model": dna_model["name"],
+                    "Prot_Model": protein_model["name"],
+                    "Network": architecture,
+                    "Architecture": architecture,
+                    "Variant": variant,
+                    "Input_Representation": embedding_representation,
+                    "Classifier": "Residual_MLP",
+                    "Feature_Set": "DNA+Protein+Bio+Geometry" if dimensions["geometry"] else "DNA+Protein+Bio",
+                    "Source": source,
+                    "Candidate_Level": "single_run",
+                    "Seed": int(config["seed"]),
+                    "N_Seeds": 1,
+                    "Decision_Threshold": threshold,
+                    "Best_Epoch": validation_row["Best_Epoch"],
+                    "Fit_Seconds": validation_row["Fit_Seconds"],
+                    "Val_MCC": validation_row["Val_MCC"],
+                    "Parameters": parameter_count,
+                    "Hyperparameters": json.dumps(config, sort_keys=True),
+                    "Source_File": str(test_path),
+                    **{
+                        f"Val_{key}": validation_row.get(f"Val_{key}", np.nan)
+                        for key in (
+                            "Accuracy", "Precision", "Recall", "Specificity",
+                            "F1_Score", "MCC", "AUROC", "AUPRC",
+                        )
+                    },
+                    **metrics,
+                    **profile_metrics,
+                }
+                prediction_rows.extend({
+                    "Target_Config": target_name,
+                    "Dataset": dataset_name,
+                    "Variant_ID": str(variant_id),
+                    "Label": int(label),
+                    "Probability_Pathogenic": float(probability),
+                    "Prediction": int(prediction),
+                } for variant_id, label, probability, prediction in zip(
+                    test_loader.dataset.df["Variant_ID"].astype(str), y_test, p_test, y_pred
+                ))
+                save_progress_csv(prediction_rows, predictions_path)
+                test_rows = upsert_record(test_rows, test_row, ["Target_Config", "Dataset"])
+                save_progress_csv(test_rows, test_path)
+                print(
+                    f"[{architecture}] Test complete: {target_name} / {dataset_name} "
+                    f"MCC={metrics['MCC']:.4f} AUROC={metrics['AUROC']:.4f} "
+                    f"AUPRC={metrics['AUPRC']:.4f}"
+                )
+            profiler.close()
 
     results = {
         "output_dir": str(stage_dir),
@@ -458,10 +753,11 @@ def run_architecture_experiment(
     return results
 
 
-def run_architecture_grid(
+def run_architecture_optuna(
     context,
     base_config,
     search_space,
+    n_trials,
     model_builder,
     architecture,
     variant_builder,
@@ -469,24 +765,37 @@ def run_architecture_grid(
     source,
     display_fn=None,
     manifest_architecture=None,
+    embedding_representation="delta",
 ):
-    """Run a Cartesian hyperparameter grid, resuming each trial independently."""
+    """Optimize validation MCC with resumable TPE trials; test rows are reports only."""
     pipeline = context["pipeline"]
     display = display_fn or print
-    search_keys = list(search_space)
-    search_values = [list(search_space[key]) for key in search_keys]
-    if any(not values for values in search_values):
-        raise ValueError("Every grid-search parameter must have at least one candidate value")
-    unknown_keys = [key for key in search_keys if key not in base_config]
-    if unknown_keys:
-        raise KeyError(f"Grid parameters are absent from the base config: {unknown_keys}")
+    unknown = [key for key in search_space if key not in base_config]
+    if unknown:
+        raise KeyError(f"Optuna parameters are absent from the base config: {unknown}")
 
+    objective_name = str(context.get(
+        "optuna_objective_name", "mean_validation_mcc_across_A_and_B"
+    ))
     root_dir = Path(pipeline.batch_run_dir) / "module06_architecture_experiments" / experiment_key
     root_dir.mkdir(parents=True, exist_ok=True)
+    study_dir = root_dir / "optuna"
+    # A changed search space must not silently reuse incompatible trial artifacts.
+    ensure_stage_signature(study_dir, f"module06_{experiment_key}_optuna", {
+        "architecture": manifest_architecture or architecture,
+        "base_config": base_config,
+        "search_space": search_space,
+        "target_configs": context["TARGET_CONFIGS"],
+        "datasets": context["datasets"],
+        "embedding_representation": embedding_representation,
+        "objective": objective_name,
+        "input_data_signature": context.get("input_data_signature"),
+    })
+
     aggregate_paths = {
-        "validation_metrics": root_dir / f"{experiment_key}_grid_validation_metrics.csv",
-        "test_metrics": root_dir / f"{experiment_key}_grid_test_metrics.csv",
-        "epoch_history": root_dir / f"{experiment_key}_grid_epoch_history.csv",
+        "validation_metrics": root_dir / f"{experiment_key}_optuna_validation_metrics.csv",
+        "test_metrics": root_dir / f"{experiment_key}_optuna_test_metrics.csv",
+        "epoch_history": root_dir / f"{experiment_key}_optuna_epoch_history.csv",
     }
     aggregate_keys = {
         "validation_metrics": ["Trial_ID", "Target_Config"],
@@ -497,44 +806,90 @@ def run_architecture_grid(
         name: pd.read_csv(path).to_dict("records") if path.exists() else []
         for name, path in aggregate_paths.items()
     }
+    trial_log_path = root_dir / f"{experiment_key}_optuna_trials.csv"
+    trial_log = pd.read_csv(trial_log_path).to_dict("records") if trial_log_path.exists() else []
 
-    combinations = list(product(*search_values)) if search_keys else [()]
-    for index, values in enumerate(combinations, start=1):
-        trial_id = f"trial_{index:03d}"
+    sampler_seed = int(base_config.get("seed", 42))
+    plan = optuna_trial_plan(
+        study_dir,
+        f"module06_{experiment_key}",
+        int(n_trials),
+        search_space,
+        seed=sampler_seed,
+    )
+    for study, opt_trial, params, is_new in plan:
+        trial_id = f"optuna_{opt_trial.number:04d}"
         trial_config = dict(base_config)
-        trial_config.update(dict(zip(search_keys, values)))
-        trial_params = {key: trial_config[key] for key in search_keys}
-        variant = variant_builder(trial_config)
+        trial_config.update(params)
+        stable_params = json.dumps(params, sort_keys=True, separators=(",", ":"))
+        artifact_id = "params_" + hashlib.sha1(stable_params.encode("utf-8")).hexdigest()[:12]
         result = run_architecture_experiment(
             context=context,
             experiment_config=trial_config,
             model_builder=model_builder,
             architecture=architecture,
-            variant=variant,
+            variant=variant_builder(trial_config),
             experiment_key=experiment_key,
             source=source,
-            # Show one compact grid summary below, not a separate table per trial.
             display_fn=lambda *_args, **_kwargs: None,
             manifest_architecture=manifest_architecture,
-            trial_name=trial_id,
+            # A stable parameter key lets a retried RUNNING Optuna trial resume
+            # its epoch checkpoint even when Optuna assigns it a new trial number.
+            trial_name=artifact_id,
+            embedding_representation=embedding_representation,
         )
 
-        for name in aggregate_paths:
+        validation = result["validation_metrics"]
+        if validation.empty or "Val_MCC" not in validation:
+            raise RuntimeError(f"Optuna trial {trial_id} produced no validation MCC")
+        validation = validation.copy()
+        validation["Val_MCC"] = pd.to_numeric(validation["Val_MCC"], errors="coerce")
+        objective = float(validation["Val_MCC"].mean())
+        by_config = {
+            str(row["Target_Config"]): float(row["Val_MCC"])
+            for _, row in validation.iterrows()
+            if pd.notna(row["Val_MCC"])
+        }
+
+        for name, output_path in aggregate_paths.items():
             frame = result[name].copy()
             if frame.empty:
                 continue
             frame["Trial_ID"] = trial_id
-            frame["Grid_Hyperparameters"] = json.dumps(trial_params, sort_keys=True)
+            frame["Optuna_Trial"] = int(opt_trial.number)
+            frame["Optuna_Hyperparameters"] = json.dumps(params, sort_keys=True)
+            frame["Optuna_Objective_Mean_Val_MCC"] = objective
             merged = pd.concat([pd.DataFrame(aggregates[name]), frame], ignore_index=True, sort=False)
-            keys = aggregate_keys[name]
-            merged = merged.drop_duplicates(subset=keys, keep="last")
+            merged = merged.drop_duplicates(subset=aggregate_keys[name], keep="last")
             aggregates[name] = merged.to_dict("records")
-            save_progress_csv(aggregates[name], aggregate_paths[name])
+            save_progress_csv(aggregates[name], output_path)
 
-        display(f"[{architecture} grid] {trial_id}/{len(combinations)} complete: {trial_params}")
+        if is_new:
+            opt_trial.set_user_attr("validation_mcc_by_config", by_config)
+            tell_trial(study, opt_trial, objective)
+
+        trial_row = {
+            "Optuna_Trial": int(opt_trial.number),
+            "Trial_ID": trial_id,
+            "State": "COMPLETE",
+            "Objective_Name": objective_name,
+            "Objective_Value": objective,
+            "Val_MCC_A": by_config.get("A_no_geometry", np.nan),
+            "Val_MCC_B": by_config.get("B_with_geometry", np.nan),
+            "Hyperparameters": json.dumps(params, sort_keys=True),
+        }
+        trial_log = [row for row in trial_log if row.get("Trial_ID") != trial_id]
+        trial_log.append(trial_row)
+        save_progress_csv(trial_log, trial_log_path)
+        display(
+            f"[{architecture} Optuna] {trial_id}; mean validation MCC={objective:.4f}; "
+            f"A={by_config.get('A_no_geometry', float('nan')):.4f}; "
+            f"B={by_config.get('B_with_geometry', float('nan')):.4f}; params={params}"
+        )
 
     results = {
         "output_dir": str(root_dir),
+        "trials": pd.DataFrame(trial_log).sort_values("Optuna_Trial") if trial_log else pd.DataFrame(),
         **{name: pd.DataFrame(rows) for name, rows in aggregates.items()},
     }
     if not results["validation_metrics"].empty:
@@ -545,6 +900,5 @@ def run_architecture_grid(
         display(results["test_metrics"].sort_values(
             ["Target_Config", "Dataset", "MCC"], ascending=[True, True, False]
         ))
-    display(f"{architecture} grid complete ({len(combinations)} trials). Aggregate CSVs: {root_dir}")
+    display(f"{architecture} Optuna study complete. SQLite and CSV results: {root_dir}")
     return results
-

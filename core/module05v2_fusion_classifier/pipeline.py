@@ -737,6 +737,9 @@ class FusionBatchPipeline:
         geom_feature_names=None,
         geometry_context=None,
         loader_seed=None,
+        embedding_representation="delta",
+        geometry_dna_name=None,
+        geometry_protein_name=None,
     ):
         geometry_active = "geom" in [str(mod).lower() for mod in active_mods]
         selected_geom = set(geom_feature_names or self.geom_feature_names or GEOM_FEATURE_COLUMNS)
@@ -749,14 +752,19 @@ class FusionBatchPipeline:
             geometry_dir = geometry_dir.replace("{context}", str(geometry_context))
         dataset = VariantFusionDataset(
             bio_parquet_path=_resolve_bio_path(self.bio_dir, split_name),
-            dna_geom_path=_resolve_geom_path(geometry_dir, split_name, dna_name, pooling)
+            dna_geom_path=_resolve_geom_path(
+                geometry_dir, split_name, geometry_dna_name or dna_name, pooling
+            )
             if dna_name != "None" and use_dna_geom else None,
-            prot_geom_path=_resolve_geom_path(geometry_dir, split_name, prot_name, pooling)
+            prot_geom_path=_resolve_geom_path(
+                geometry_dir, split_name, geometry_protein_name or prot_name, pooling
+            )
             if prot_name != "None" and use_prot_geom else None,
             dna_pt_path=_resolve_pt_path(self.embed_dir, split_name, dna_name, pooling) if dna_name != "None" else None,
             prot_pt_path=_resolve_pt_path(self.embed_dir, split_name, prot_name, pooling) if prot_name != "None" else None,
             active_modalities=active_mods,
             geom_feature_names=geom_feature_names or self.geom_feature_names,
+            embedding_representation=embedding_representation,
             is_train=is_train,
         )
         generator = torch.Generator()

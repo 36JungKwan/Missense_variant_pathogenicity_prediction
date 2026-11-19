@@ -1,0 +1,109 @@
+{
+  "config": {
+    "architecture": "RouterExpert",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "name": "nt_v1_500m_dna_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 42,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "protein_model": {
+      "name": "esm2_650m_prot_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "router_expert_config": {
+      "beta_init": 0.05,
+      "correction_hidden_dim": 640,
+      "dropout": 0.013036028681463793,
+      "early_stop_patience": 6,
+      "embedding_dim": 832,
+      "expert_hidden_dim": 320,
+      "learning_rate": 1.6221431407727567e-06,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "router_hidden_dim": 128,
+      "router_temperature": 0.6147187591263781,
+      "seed": 42,
+      "weight_decay": 0.07917735647126523
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai"
+        ],
+        "geom_feature_names": null,
+        "name": "A_no_geometry"
+      },
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "three_expert_softmax_router_joint_logit_correction"
+  },
+  "config_sha256": "dbcca4804a6277be425de7743d831f8afc1d6704c1ff76a2116ac0d9af4f5736",
+  "stage": "module06_router_expert",
+  "version": 1
+}

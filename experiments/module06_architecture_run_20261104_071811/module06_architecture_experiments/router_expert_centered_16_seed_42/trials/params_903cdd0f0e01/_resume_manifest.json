@@ -1,0 +1,123 @@
+{
+  "config": {
+    "architecture": "router_expert_centered_16_token_inputs_with_three_experts_and_joint_correction",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "name": "nt_v1_500m_dna_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "delta",
+    "input_data_signature": {
+      "architecture": "three_expert_router_with_token_level_dna_protein_experts",
+      "k_semantics": "centered_16 means 16 tokens per side plus variant (33 total); full_tokens uses all valid positions",
+      "token_batch_size": 8,
+      "token_cache_index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\module06_architecture_run_20261104_071811\\module06_architecture_experiments\\token_embedding_cache_index.json",
+      "token_cache_root": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+      "token_models": {
+        "dna": "nt_v1_500m_dna_1001",
+        "protein": "esm2_650m_prot_501"
+      },
+      "token_scope": "centered_16"
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 42,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "protein_model": {
+      "name": "esm2_650m_prot_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "router_expert_centered_16_seed_42_config": {
+      "beta_init": 0.05,
+      "correction_hidden_dim": 128,
+      "dropout": 0.23994362910538697,
+      "early_stop_patience": 6,
+      "embedding_dim": 512,
+      "expert_hidden_dim": 256,
+      "learning_rate": 2.9187378749091756e-06,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "router_hidden_dim": 64,
+      "router_temperature": 0.7181276284502022,
+      "seed": 42,
+      "token_dim": 512,
+      "weight_decay": 0.01788423045032554
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai"
+        ],
+        "geom_feature_names": null,
+        "name": "A_no_geometry"
+      },
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "k16_window33_token_dim_512_embedding_512_beta_0.05"
+  },
+  "config_sha256": "12b42547fbd74d5095ef6c77972613c1536193d319bfd67728ea85a7f2ecbed2",
+  "stage": "module06_router_expert_centered_16_seed_42",
+  "version": 1
+}

@@ -25,7 +25,7 @@ class FusionEvaluatorProfiler:
     """
     def __init__(
         self,
-        tensorboard_dir: str,
+        tensorboard_dir: str | None,
         fm_profile_json: str,
         device: torch.device,
         geom_profile_json: str | None = None,
@@ -34,8 +34,11 @@ class FusionEvaluatorProfiler:
         self.fm_profile_json = fm_profile_json
         self.geom_profile_json = geom_profile_json
         
-        os.makedirs(tensorboard_dir, exist_ok=True)
-        self.writer = SummaryWriter(log_dir=tensorboard_dir)
+        if tensorboard_dir:
+            os.makedirs(tensorboard_dir, exist_ok=True)
+            self.writer = SummaryWriter(log_dir=tensorboard_dir)
+        else:
+            self.writer = None
         
         self.fusion_metrics = {
             "gflops_per_sample": 0.0,
@@ -320,12 +323,16 @@ class FusionEvaluatorProfiler:
     # 4. TENSORBOARD LOGGING
     # =========================================================================
     def log_epoch_scalars(self, epoch: int, train_loss: float, val_loss: float, val_metrics: dict):
+        if self.writer is None:
+            return
         self.writer.add_scalar('Loss/Train', train_loss, epoch)
         self.writer.add_scalar('Loss/Validation', val_loss, epoch)
         for metric_name, value in val_metrics.items():
             self.writer.add_scalar(f'Metrics/{metric_name}', value, epoch)
 
     def log_hparams(self, hparam_dict: dict, final_metrics: dict):
+        if self.writer is None:
+            return
         self.writer.add_hparams(
             hparam_dict=hparam_dict,
             metric_dict=final_metrics,
@@ -334,4 +341,5 @@ class FusionEvaluatorProfiler:
         self.writer.flush()
         
     def close(self):
-        self.writer.close()
+        if self.writer is not None:
+            self.writer.close()

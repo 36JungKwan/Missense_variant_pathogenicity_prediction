@@ -1,0 +1,122 @@
+{
+  "config": {
+    "architecture": "joint_transformer_dna_protein_bio_geometry_feature_tokens",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "name": "nt_v1_500m_dna_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "delta",
+    "input_data_signature": {
+      "architecture": "joint_transformer_over_dna_protein_and_per_feature_bio_geometry_tokens",
+      "token_batch_size": 8,
+      "token_cache_index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\module06_architecture_run_20261104_071811\\module06_architecture_experiments\\token_embedding_cache_index.json",
+      "token_cache_root": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+      "token_models": {
+        "dna": "nt_v1_500m_dna_1001",
+        "protein": "esm2_650m_prot_501"
+      }
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 42,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "protein_model": {
+      "name": "esm2_650m_prot_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai"
+        ],
+        "geom_feature_names": null,
+        "name": "A_no_geometry"
+      },
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ],
+    "transformer_3modal_seed_42_config": {
+      "attention_dropout": 0.2479445200259184,
+      "dropout": 0.2382117992099408,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.1824008831501051,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00040558829589156566,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 128,
+      "num_heads": 4,
+      "num_layers": 4,
+      "pooling": "mean",
+      "seed": 42,
+      "weight_decay": 0.15079137338806164
+    },
+    "variant": "radius_16_window_33_layers_4_dim_128_pool_mean"
+  },
+  "config_sha256": "a62017f9b9c703b06d1eeba073288a6e58ae5526c770392d3cc48ce928290ac8",
+  "stage": "module06_transformer_3modal_seed_42",
+  "version": 1
+}

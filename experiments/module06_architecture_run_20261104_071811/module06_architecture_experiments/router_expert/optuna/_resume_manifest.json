@@ -1,0 +1,143 @@
+{
+  "config": {
+    "architecture": "RouterExpert",
+    "base_config": {
+      "beta_init": 0.0,
+      "correction_hidden_dim": 256,
+      "dropout": 0.2,
+      "early_stop_patience": 6,
+      "embedding_dim": 256,
+      "expert_hidden_dim": 256,
+      "learning_rate": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "router_hidden_dim": 128,
+      "router_temperature": 1.0,
+      "seed": 42,
+      "weight_decay": 0.001
+    },
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "objective": "mean_validation_mcc_across_A_and_B",
+    "search_space": {
+      "beta_init": {
+        "choices": [
+          0.0,
+          0.01,
+          0.05,
+          0.1,
+          0.25
+        ],
+        "type": "categorical"
+      },
+      "correction_hidden_dim": {
+        "high": 1024,
+        "low": 64,
+        "step": 64,
+        "type": "int"
+      },
+      "dropout": {
+        "high": 0.4,
+        "low": 0.005,
+        "type": "float"
+      },
+      "embedding_dim": {
+        "high": 4096,
+        "low": 128,
+        "step": 64,
+        "type": "int"
+      },
+      "expert_hidden_dim": {
+        "high": 1024,
+        "low": 64,
+        "step": 64,
+        "type": "int"
+      },
+      "learning_rate": {
+        "high": 0.002,
+        "log": true,
+        "low": 1e-06,
+        "type": "float"
+      },
+      "router_hidden_dim": {
+        "high": 768,
+        "low": 16,
+        "step": 16,
+        "type": "int"
+      },
+      "router_temperature": {
+        "high": 2.0,
+        "low": 0.05,
+        "type": "float"
+      },
+      "weight_decay": {
+        "high": 0.1,
+        "log": true,
+        "low": 1e-06,
+        "type": "float"
+      }
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai"
+        ],
+        "geom_feature_names": null,
+        "name": "A_no_geometry"
+      },
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ]
+  },
+  "config_sha256": "b729e5c8b368b686ab4cf9efa378b6ed686ac3f78b9de0e3a7f350493c09c9ea",
+  "stage": "module06_router_expert_optuna",
+  "version": 1
+}

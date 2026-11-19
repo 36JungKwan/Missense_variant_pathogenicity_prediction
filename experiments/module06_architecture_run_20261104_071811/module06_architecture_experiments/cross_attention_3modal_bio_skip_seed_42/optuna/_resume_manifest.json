@@ -1,0 +1,156 @@
+{
+  "config": {
+    "architecture": "tri_modal_cross_attention_no_block_residual_bio_only_direct_skip",
+    "base_config": {
+      "attention_dropout": 0.1,
+      "dropout": 0.2,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.05,
+      "ffn_multiplier": 4,
+      "k_radius": 8,
+      "learning_rate": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 256,
+      "num_heads": 8,
+      "num_layers": 2,
+      "pooling": "attention",
+      "seed": 42,
+      "weight_decay": 0.001
+    },
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "embedding_representation": "delta",
+    "input_data_signature": {
+      "architecture": "tri_modal_cross_attention_no_block_residual_bio_only_direct_skip",
+      "bio_skip": "pre_cross_attention_bio_feature_tokens_pooled_to_classifier",
+      "block_residuals": false,
+      "geometry_skip": "excluded; geometry participates in tri-modal cross-attention only",
+      "k_semantics": "k_tokens_per_side; window_length=2*k+1",
+      "token_batch_size": 8,
+      "token_cache_index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\module06_architecture_run_20261104_071811\\module06_architecture_experiments\\token_embedding_cache_index.json",
+      "token_cache_root": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+      "token_models": {
+        "dna": "nt_v1_500m_dna_1001",
+        "protein": "esm2_650m_prot_501"
+      }
+    },
+    "objective": "validation_mcc_on_B_with_geometry",
+    "search_space": {
+      "attention_dropout": {
+        "high": 0.1,
+        "low": 0.09,
+        "type": "float"
+      },
+      "dropout": {
+        "high": 0.28,
+        "low": 0.27,
+        "type": "float"
+      },
+      "feature_dropout": {
+        "high": 0.22,
+        "low": 0.2,
+        "type": "float"
+      },
+      "ffn_multiplier": {
+        "choices": [
+          4
+        ],
+        "type": "categorical"
+      },
+      "k_radius": {
+        "choices": [
+          16
+        ],
+        "type": "categorical"
+      },
+      "learning_rate": {
+        "high": 2e-05,
+        "log": true,
+        "low": 1e-05,
+        "type": "float"
+      },
+      "model_dim": {
+        "choices": [
+          512
+        ],
+        "type": "categorical"
+      },
+      "num_heads": {
+        "choices": [
+          4
+        ],
+        "type": "categorical"
+      },
+      "num_layers": {
+        "high": 3,
+        "low": 3,
+        "type": "int"
+      },
+      "pooling": {
+        "choices": [
+          "mean",
+          "attention"
+        ],
+        "type": "categorical"
+      },
+      "weight_decay": {
+        "high": 0.0004,
+        "log": true,
+        "low": 3e-05,
+        "type": "float"
+      }
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ]
+  },
+  "config_sha256": "4029935a0ebd31cdd3ace37c785e3a444aa2274504cba43ceec95426cd2ec5e0",
+  "stage": "module06_cross_attention_3modal_bio_skip_seed_42_optuna",
+  "version": 1
+}

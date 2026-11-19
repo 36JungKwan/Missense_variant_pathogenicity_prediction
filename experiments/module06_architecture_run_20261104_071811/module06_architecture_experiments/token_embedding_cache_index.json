@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "cache_root": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+  "models": {
+    "nt_v1_500m_dna_1001": {
+      "train3": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train3",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 11604,
+        "hidden_size": 1280,
+        "storage_bytes": 20529796800,
+        "estimated_storage_bytes": 22072924569,
+        "elapsed_seconds": 1218.445051399991
+      },
+      "val": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\val",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 6851,
+        "hidden_size": 1280,
+        "storage_bytes": 12119906704,
+        "estimated_storage_bytes": 13030900531,
+        "elapsed_seconds": 476.2151287000015
+      },
+      "test": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\test",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 3048,
+        "hidden_size": 1280,
+        "storage_bytes": 5391639104,
+        "estimated_storage_bytes": 5796900864,
+        "elapsed_seconds": 125.03408959999797
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\clinvarhq",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 352,
+        "hidden_size": 1280,
+        "storage_bytes": 621875904,
+        "estimated_storage_bytes": 668617113,
+        "elapsed_seconds": 10.626149299991084
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\uniprot",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 667,
+        "hidden_size": 1280,
+        "storage_bytes": 1179173904,
+        "estimated_storage_bytes": 1267804569,
+        "elapsed_seconds": 18.580755499991938
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\proteingym",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 736,
+        "hidden_size": 1280,
+        "storage_bytes": 1302131200,
+        "estimated_storage_bytes": 1400006246,
+        "elapsed_seconds": 20.664540400000988
+      }
+    },
+    "esm2_650m_prot_501": {
+      "train3": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\train3",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 5802,
+        "hidden_size": 1280,
+        "storage_bytes": 59911810656,
+        "estimated_storage_bytes": 64550471270,
+        "elapsed_seconds": 780.1383084000117
+      },
+      "val": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\val",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 3426,
+        "hidden_size": 1280,
+        "storage_bytes": 35369340832,
+        "estimated_storage_bytes": 38107807948,
+        "elapsed_seconds": 409.19335450000654
+      },
+      "test": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\test",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 1524,
+        "hidden_size": 1280,
+        "storage_bytes": 15734339648,
+        "estimated_storage_bytes": 16952564736,
+        "elapsed_seconds": 164.9088630999904
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\clinvarhq",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 176,
+        "hidden_size": 1280,
+        "storage_bytes": 1814806720,
+        "estimated_storage_bytes": 1955316326,
+        "elapsed_seconds": 17.240669999999227
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\uniprot",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 334,
+        "hidden_size": 1280,
+        "storage_bytes": 3441164000,
+        "estimated_storage_bytes": 3707591270,
+        "elapsed_seconds": 34.581078499992145
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\proteingym",
+        "manifest": "D:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm2_650m_prot_501\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 368,
+        "hidden_size": 1280,
+        "storage_bytes": 3799991168,
+        "estimated_storage_bytes": 4094204313,
+        "elapsed_seconds": 37.63858600000094
+      }
+    }
+  },
+  "updated_at": "2026-11-07T12:53:58.826858+00:00",
+  "index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\module06_architecture_run_20261104_071811\\module06_architecture_experiments\\token_embedding_cache_index.json"
+}

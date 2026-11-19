@@ -1,0 +1,20 @@
+{
+  "seed": 2,
+  "train_split": "train3",
+  "network": "Hybrid_CrossAttn_XGBoost",
+  "selected_candidate": "deeper_regularized",
+  "parameters": {
+    "name": "deeper_regularized",
+    "xgb_max_depth": 8,
+    "xgb_learning_rate": 0.05,
+    "xgb_n_estimators": 400,
+    "xgb_min_child_weight": 5,
+    "xgb_subsample": 0.8,
+    "xgb_colsample_bytree": 0.8,
+    "xgb_reg_lambda": 5.0
+  },
+  "cv_mcc_at_0_5_mean": 0.807884824080224,
+  "final_epochs": 2,
+  "final_xgboost_trees": 111,
+  "threshold_source": "separate val split"
+}

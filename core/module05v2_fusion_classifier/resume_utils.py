@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
+import time
 import warnings
 from pathlib import Path
 from typing import Any
@@ -70,14 +73,40 @@ def ensure_stage_signature(stage_dir: str | Path, stage_name: str, config: dict)
     return path
 
 
+def replace_file_with_retry(temporary, destination):
+    """Replace an output file, retrying transient Windows file-lock errors."""
+    destination = Path(destination)
+    for attempt in range(5):
+        try:
+            os.replace(temporary, destination)
+            return
+        except PermissionError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33) or attempt == 4:
+                raise PermissionError(
+                    f"Unable to replace output file '{destination}'. Close any application "
+                    "using this file and retry."
+                ) from error
+            time.sleep(0.1 * (2 ** attempt))
+
+
 def save_progress_csv(rows, path):
     """Atomically persist completed candidate rows during a long-running stage."""
     import pandas as pd
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    pd.DataFrame(rows).to_csv(temporary, index=False)
-    temporary.replace(path)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f"{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        pd.DataFrame(rows).to_csv(temporary, index=False)
+        replace_file_with_retry(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 def upsert_record(rows, row, keys):
     """Replace a candidate's previous progress record, avoiding duplicate rows."""

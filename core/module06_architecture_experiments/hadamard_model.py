@@ -42,6 +42,7 @@ class HadamardEmbeddingFusion(nn.Module):
 
         self.dna_projection = projection(dna_dim, hidden_dim)
         self.protein_projection = projection(protein_dim, hidden_dim)
+        self.biological_input_norm = nn.LayerNorm(biological_dim)
         self.biological_projection = projection(biological_dim, bio_hidden_dim)
 
         self.sequence_interaction = nn.Sequential(
@@ -50,9 +51,6 @@ class HadamardEmbeddingFusion(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
         )
-        self.sequence_skip = nn.Linear(2 * hidden_dim, fusion_dim)
-        self.sequence_activation = nn.GELU()
-        self.sequence_norm = nn.LayerNorm(fusion_dim)
 
         classifier_input_dim = fusion_dim + bio_hidden_dim
         self.classifier_main = nn.Sequential(
@@ -82,16 +80,12 @@ class HadamardEmbeddingFusion(nn.Module):
             if geom_features is not None
             else bio_features
         )
-        h_bio = self.biological_projection(h_bio_input)
+        h_bio = self.biological_projection(self.biological_input_norm(h_bio_input))
 
         pairwise = h_dna * h_protein
         h_sequence = self.sequence_interaction(
             torch.cat((h_dna, h_protein, pairwise), dim=-1)
         )
-        h_sequence = self.sequence_norm(
-            h_sequence + self.sequence_skip(torch.cat((h_dna, h_protein), dim=-1))
-        )
-        h_sequence = self.sequence_activation(h_sequence)
 
         fused = torch.cat((h_sequence, h_bio), dim=-1)
         hidden = self.classifier_activation(

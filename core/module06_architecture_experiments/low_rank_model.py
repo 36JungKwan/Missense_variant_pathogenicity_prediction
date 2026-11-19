@@ -6,13 +6,11 @@ from torch import nn
 
 
 class LowRankMultimodalFusion(nn.Module):
-    """Three-way low-rank multiplicative fusion with a unimodal skip path.
+    """Three-way low-rank multiplicative fusion from the group proposal.
 
     Each modality is projected independently. Modality-specific factors are
     reshaped to ``[batch, rank, fusion_dim]``, multiplied elementwise across
-    modalities, then summed across rank. A learned linear skip from all three
-    projected modalities preserves information that need not be represented
-    as a three-way interaction.
+    modalities, then summed across rank.
     """
 
     def __init__(
@@ -56,20 +54,13 @@ class LowRankMultimodalFusion(nn.Module):
 
         self.interaction_norm = nn.LayerNorm(self.fusion_dim)
         self.interaction_dropout = nn.Dropout(dropout)
-        self.skip_projection = nn.Linear(3 * self.hidden_dim, self.fusion_dim)
-
-        self.head_main = nn.Sequential(
-            nn.Linear(self.fusion_dim, 256),
-            nn.LayerNorm(256),
+        self.classifier = nn.Sequential(
+            nn.Linear(self.fusion_dim, head_dim),
+            nn.LayerNorm(head_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(256, head_dim),
-            nn.LayerNorm(head_dim),
+            nn.Linear(head_dim, 1),
         )
-        self.head_skip = nn.Linear(self.fusion_dim, head_dim)
-        self.head_activation = nn.GELU()
-        self.head_dropout = nn.Dropout(dropout)
-        self.output = nn.Linear(head_dim, 1)
 
     def _factor(self, value: torch.Tensor, layer: nn.Linear) -> torch.Tensor:
         bias = value.new_ones((value.shape[0], 1))
@@ -97,9 +88,5 @@ class LowRankMultimodalFusion(nn.Module):
         biological_factor = self._factor(h_bio, self.biological_factor)
         interaction = (dna_factor * protein_factor * biological_factor).sum(dim=1)
 
-        unimodal_skip = self.skip_projection(torch.cat((h_dna, h_protein, h_bio), dim=-1))
-        fused = self.interaction_dropout(self.head_activation(
-            self.interaction_norm(interaction) + unimodal_skip
-        ))
-        hidden = self.head_activation(self.head_main(fused) + self.head_skip(fused))
-        return self.output(self.head_dropout(hidden))
+        fused = self.interaction_dropout(self.interaction_norm(interaction))
+        return self.classifier(fused)

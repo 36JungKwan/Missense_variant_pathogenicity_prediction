@@ -1,0 +1,2 @@
+Target_Config,Architecture,Variant,Epoch,Train_Loss,Val_Loss,Val_MCC,Val_Threshold,Val_AUROC,Val_AUPRC,Learning_Rate
+B_with_geometry,CrossAttention_ThreeModalities_BioSkip,bio_skip_radius_16_window_33_layers_3_dim_512_pool_mean,1,0.30962572676013744,0.18527758854102355,0.7940220135508652,0.7088893055915833,0.9686,0.901,1.7806977278701945e-05

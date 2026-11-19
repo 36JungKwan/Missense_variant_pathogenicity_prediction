@@ -1,0 +1,119 @@
+{
+  "config": {
+    "architecture": "IndependentGating",
+    "base_config": {
+      "bio_hidden_dim": 256,
+      "dropout": 0.2,
+      "early_stop_patience": 6,
+      "head_dim": 128,
+      "hidden_dim": 256,
+      "learning_rate": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "seed": 42,
+      "weight_decay": 0.001
+    },
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "objective": "mean_validation_mcc_across_A_and_B",
+    "search_space": {
+      "bio_hidden_dim": {
+        "high": 2048,
+        "low": 64,
+        "step": 64,
+        "type": "int"
+      },
+      "dropout": {
+        "high": 0.4,
+        "low": 0.005,
+        "type": "float"
+      },
+      "head_dim": {
+        "high": 256,
+        "low": 64,
+        "step": 64,
+        "type": "int"
+      },
+      "hidden_dim": {
+        "high": 2048,
+        "low": 64,
+        "step": 64,
+        "type": "int"
+      },
+      "learning_rate": {
+        "high": 0.002,
+        "log": true,
+        "low": 1e-06,
+        "type": "float"
+      },
+      "weight_decay": {
+        "high": 0.1,
+        "log": true,
+        "low": 1e-06,
+        "type": "float"
+      }
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai"
+        ],
+        "geom_feature_names": null,
+        "name": "A_no_geometry"
+      },
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "name": "B_with_geometry"
+      }
+    ]
+  },
+  "config_sha256": "d0e5ff9c46cd8700944dfdafed92930a41e139304a3957a22e2689ef0c139b29",
+  "stage": "module06_independent_gating_optuna",
+  "version": 1
+}

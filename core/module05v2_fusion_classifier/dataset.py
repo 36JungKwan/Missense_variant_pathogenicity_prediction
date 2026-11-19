@@ -49,9 +49,16 @@ class VariantFusionDataset(Dataset):
                  prot_pt_path: str = None, 
                  active_modalities: list = None,
                  geom_feature_names: list = None,
+                 embedding_representation: str = "delta",
                  is_train: bool = True):
         
         self.is_train = is_train
+        self.embedding_representation = str(embedding_representation).strip().lower()
+        if self.embedding_representation not in {"delta", "ref_alt_concat"}:
+            raise ValueError(
+                "embedding_representation must be 'delta' or 'ref_alt_concat', "
+                f"got {embedding_representation!r}"
+            )
         
         if active_modalities is None:
             active_modalities = ['dna', 'prot', 'bio', 'geom']
@@ -140,11 +147,17 @@ class VariantFusionDataset(Dataset):
                 
             # [BẢN VÁ TỐI ƯU RAM] Cắt trích chính xác và tính V_dna sẵn
             sample_dim = dna_data["E_ref"][0].shape[0]
-            self.v_dna_tensor = torch.zeros((num_samples, sample_dim), dtype=torch.float32)
+            output_dim = sample_dim * (2 if self.embedding_representation == "ref_alt_concat" else 1)
+            self.v_dna_tensor = torch.zeros((num_samples, output_dim), dtype=torch.float32)
             
             for i, vid in enumerate(variant_ids):
                 idx = dna_idx_map[vid]
-                self.v_dna_tensor[i] = (dna_data["E_alt"][idx] - dna_data["E_ref"][idx]).to(torch.float32)
+                e_ref = dna_data["E_ref"][idx].to(torch.float32)
+                e_alt = dna_data["E_alt"][idx].to(torch.float32)
+                if self.embedding_representation == "ref_alt_concat":
+                    self.v_dna_tensor[i] = torch.cat((e_ref, e_alt), dim=-1)
+                else:
+                    self.v_dna_tensor[i] = e_alt - e_ref
                 
             # Xóa sổ toàn bộ file .pt khổng lồ khỏi RAM
             del dna_data, dna_idx_map
@@ -160,11 +173,17 @@ class VariantFusionDataset(Dataset):
                 raise ValueError(f"[LỖI] Thiếu {len(missing_in_prot)} Variant_ID trong Protein Embeddings!")
                 
             sample_dim = prot_data["E_ref"][0].shape[0]
-            self.v_prot_tensor = torch.zeros((num_samples, sample_dim), dtype=torch.float32)
+            output_dim = sample_dim * (2 if self.embedding_representation == "ref_alt_concat" else 1)
+            self.v_prot_tensor = torch.zeros((num_samples, output_dim), dtype=torch.float32)
             
             for i, vid in enumerate(variant_ids):
                 idx = prot_idx_map[vid]
-                self.v_prot_tensor[i] = (prot_data["E_alt"][idx] - prot_data["E_ref"][idx]).to(torch.float32)
+                e_ref = prot_data["E_ref"][idx].to(torch.float32)
+                e_alt = prot_data["E_alt"][idx].to(torch.float32)
+                if self.embedding_representation == "ref_alt_concat":
+                    self.v_prot_tensor[i] = torch.cat((e_ref, e_alt), dim=-1)
+                else:
+                    self.v_prot_tensor[i] = e_alt - e_ref
                 
             del prot_data, prot_idx_map
             gc.collect()

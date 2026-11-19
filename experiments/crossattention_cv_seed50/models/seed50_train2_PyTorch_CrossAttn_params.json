@@ -1,0 +1,16 @@
+{
+  "seed": 50,
+  "train_split": "train2",
+  "network": "PyTorch_CrossAttn",
+  "selected_candidate": "lower_lr",
+  "parameters": {
+    "name": "lower_lr",
+    "lr": 5e-05,
+    "weight_decay": 0.001,
+    "dropout": 0.1
+  },
+  "cv_mcc_at_0_5_mean": 0.7876241077586122,
+  "final_epochs": 3,
+  "final_xgboost_trees": null,
+  "threshold_source": "separate val split"
+}
