@@ -1,0 +1,335 @@
+{
+  "config": {
+    "baseline_source": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605\\module06_architecture_experiments\\fusion_classifier_benchmark\\seed_level_test_metrics.csv",
+    "conditions": [
+      {
+        "ablation": "Bio_Core_Only",
+        "active_modalities": [
+          "bio_core"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "gnomADe_AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals"
+        ],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "DNA_LM_Only",
+        "active_modalities": [
+          "dna"
+        ],
+        "bio_feature_names": [],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "Protein_LM_Only",
+        "active_modalities": [
+          "prot"
+        ],
+        "bio_feature_names": [],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "SpliceAI_Only",
+        "active_modalities": [
+          "spliceai"
+        ],
+        "bio_feature_names": [
+          "SpliceAI_pred_DS_AG",
+          "SpliceAI_pred_DS_AL",
+          "SpliceAI_pred_DS_DG",
+          "SpliceAI_pred_DS_DL",
+          "SpliceAI_pred_DP_AG",
+          "SpliceAI_pred_DP_AL",
+          "SpliceAI_pred_DP_DG",
+          "SpliceAI_pred_DP_DL",
+          "SpliceAI_pred_DS_max"
+        ],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "Geometry_Only",
+        "active_modalities": [
+          "geom"
+        ],
+        "bio_feature_names": [],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "DNA_Protein_Only",
+        "active_modalities": [
+          "dna",
+          "prot"
+        ],
+        "bio_feature_names": [],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "Bio_SpliceAI_Geometry_Only",
+        "active_modalities": [
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "gnomADe_AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals",
+          "SpliceAI_pred_DS_AG",
+          "SpliceAI_pred_DS_AL",
+          "SpliceAI_pred_DS_DG",
+          "SpliceAI_pred_DS_DL",
+          "SpliceAI_pred_DP_AG",
+          "SpliceAI_pred_DP_AL",
+          "SpliceAI_pred_DP_DG",
+          "SpliceAI_pred_DP_DL",
+          "SpliceAI_pred_DS_max"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "Protein_Bio_SpliceAI_Geometry",
+        "active_modalities": [
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "gnomADe_AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals",
+          "SpliceAI_pred_DS_AG",
+          "SpliceAI_pred_DS_AL",
+          "SpliceAI_pred_DS_DG",
+          "SpliceAI_pred_DS_DL",
+          "SpliceAI_pred_DP_AG",
+          "SpliceAI_pred_DP_AL",
+          "SpliceAI_pred_DP_DG",
+          "SpliceAI_pred_DP_DL",
+          "SpliceAI_pred_DS_max"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "DNA_Bio_SpliceAI_Geometry",
+        "active_modalities": [
+          "dna",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "gnomADe_AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals",
+          "SpliceAI_pred_DS_AG",
+          "SpliceAI_pred_DS_AL",
+          "SpliceAI_pred_DS_DG",
+          "SpliceAI_pred_DS_DL",
+          "SpliceAI_pred_DP_AG",
+          "SpliceAI_pred_DP_AL",
+          "SpliceAI_pred_DP_DG",
+          "SpliceAI_pred_DP_DL",
+          "SpliceAI_pred_DS_max"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      },
+      {
+        "ablation": "DNA_Protein_Bio_Core",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "gnomADe_AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals"
+        ],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      }
+    ],
+    "model_config": {
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "weight_decay": 3.380881049679085e-06
+    },
+    "seeds": [
+      5,
+      6,
+      7,
+      37,
+      42
+    ],
+    "study": "modality_ablation",
+    "target": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "bio_feature_names": [
+        "AF",
+        "gnomADe_AF",
+        "phyloP100way_vertebrate",
+        "phyloP470way_mammalian",
+        "phyloP17way_primate",
+        "phastCons100way_vertebrate",
+        "phastCons470way_mammalian",
+        "phastCons17way_primate",
+        "GERP++_RS",
+        "GERP++_NR",
+        "GERP_92_mammals",
+        "SpliceAI_pred_DS_AG",
+        "SpliceAI_pred_DS_AL",
+        "SpliceAI_pred_DS_DG",
+        "SpliceAI_pred_DS_DL",
+        "SpliceAI_pred_DP_AG",
+        "SpliceAI_pred_DP_AL",
+        "SpliceAI_pred_DP_DG",
+        "SpliceAI_pred_DP_DL",
+        "SpliceAI_pred_DS_max"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    }
+  },
+  "config_sha256": "eb57df377755ba7603e3bed49b66176b9316f9d43fdcaab1835d1688980a594c",
+  "stage": "cross_attention_modality_ablation",
+  "version": 1
+}

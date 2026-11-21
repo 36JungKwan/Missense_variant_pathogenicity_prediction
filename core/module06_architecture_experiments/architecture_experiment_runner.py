@@ -89,6 +89,7 @@ def _architecture_loader(
         geometry_dna_name=target.get("geometry_dna_name"),
         geometry_protein_name=target.get("geometry_protein_name"),
         load_pooled_embeddings=not token_only,
+        bio_feature_names=target.get("bio_feature_names"),
     )
     if token_only:
         dataset = _TokenOnlyPlaceholderDataset(loader.dataset)
@@ -169,19 +170,19 @@ def _move(batch, key, device, required=False):
 
 def _forward(model, batch, device):
     inputs = [
-        _move(batch, "v_dna", device, required=True),
-        _move(batch, "v_prot", device, required=True),
-        _move(batch, "bio_features", device, required=True),
+        _move(batch, "v_dna", device),
+        _move(batch, "v_prot", device),
+        _move(batch, "bio_features", device),
         _move(batch, "geom_features", device),
     ]
     # Token-level Module 6 models opt into these additional inputs. Existing
     # pooled-embedding architectures retain their original four-argument API.
-    for key in (
+    token_keys = (
         "token_dna", "token_dna_mask", "token_dna_variant_index",
         "token_protein", "token_protein_mask", "token_protein_variant_index",
-    ):
-        if key in batch:
-            inputs.append(_move(batch, key, device))
+    )
+    if any(key in batch for key in token_keys):
+        inputs.extend(_move(batch, key, device) for key in token_keys)
     return model(*inputs)
 
 
@@ -205,6 +206,9 @@ def _attach_token_cache(loader, context, split_name, is_train=False, window_radi
     token_index = context.get("token_embedding_cache_index")
     if token_index is None:
         return loader
+    token_modalities = tuple(context.get("token_modalities", ("dna", "protein")))
+    if not token_modalities:
+        return loader
     if window_radius is not None:
         from core.module06_architecture_experiments.window_token_cache import (
             add_window_cache_to_loader,
@@ -218,6 +222,7 @@ def _attach_token_cache(loader, context, split_name, is_train=False, window_radi
             is_train=is_train,
             batch_size=context.get("token_batch_size"),
             radius=window_radius,
+            modalities=token_modalities,
         )
     from core.module06_architecture_experiments.token_topk_experiment import (
         add_token_cache_to_loader,
@@ -348,6 +353,7 @@ def run_architecture_experiment(
         int(context["token_window_radius"])
         if context.get("token_window_radius") is not None
         and context.get("token_embedding_cache_index") is not None
+        and context.get("token_modalities", ("dna", "protein"))
         else int(config["k_radius"])
         if (
             source == "fm_ablation_step1"
@@ -506,18 +512,20 @@ def run_architecture_experiment(
             )
         train_dataset = train_loader.dataset
         dimensions = {
-            "dna": int(train_dataset.v_dna_tensor.shape[1]),
-            "protein": int(train_dataset.v_prot_tensor.shape[1]),
-            "bio": int(train_dataset.bio_tensor.shape[1]),
+            "dna": int(train_dataset.v_dna_tensor.shape[1]) if getattr(train_dataset, "has_dna", False) else 0,
+            "protein": int(train_dataset.v_prot_tensor.shape[1]) if getattr(train_dataset, "has_prot", False) else 0,
+            "bio": int(train_dataset.bio_tensor.shape[1]) if getattr(train_dataset, "has_bio", False) else 0,
             "geometry": int(train_dataset.geom_tensor.shape[1]) if train_dataset.has_geom else 0,
             "active_modalities": list(target["active_modalities"]),
         }
-        if context.get("token_embedding_cache_index") is not None:
+        token_modalities = tuple(context.get("token_modalities", ("dna", "protein")))
+        if context.get("token_embedding_cache_index") is not None and token_modalities:
             dimensions.update({
-                "token_dna": int(train_loader.dataset.token_hidden_sizes["dna"]),
-                "token_protein": int(train_loader.dataset.token_hidden_sizes["protein"]),
-                "token_cache": True,
+                f"token_{modality}": int(train_loader.dataset.token_hidden_sizes[modality])
+                for modality in token_modalities
             })
+            dimensions["token_cache"] = True
+            dimensions["token_modalities"] = list(token_modalities)
         dimensions_path = model_dir / "input_dimensions.json"
         dimensions_path.write_text(
             json.dumps(dimensions, indent=2, sort_keys=True), encoding="utf-8"
@@ -798,30 +806,17 @@ def run_architecture_experiment(
                     dummy_inputs.append(torch.zeros((1, 0), device=device))
                 profile_window = 2 * int(config.get("k_radius", 0)) + 1
                 profile_center = int(config.get("k_radius", 0))
-                dummy_inputs.extend([
-                    torch.zeros((
-                        1, 2, int(config.get("profile_token_length_dna", profile_window)),
-                        dimensions["token_dna"],
-                    ), device=device),
-                    torch.ones((
-                        1, 2, int(config.get("profile_token_length_dna", profile_window)),
-                    ), dtype=torch.bool, device=device),
-                    torch.full((
-                        1, 2,
-                    ), int(config.get("profile_variant_index_dna", profile_center)),
-                       dtype=torch.long, device=device),
-                    torch.zeros((
-                        1, 2, int(config.get("profile_token_length_protein", profile_window)),
-                        dimensions["token_protein"],
-                    ), device=device),
-                    torch.ones((
-                        1, 2, int(config.get("profile_token_length_protein", profile_window)),
-                    ), dtype=torch.bool, device=device),
-                    torch.full((
-                        1, 2,
-                    ), int(config.get("profile_variant_index_protein", profile_center)),
-                       dtype=torch.long, device=device),
-                ])
+                for modality in ("dna", "protein"):
+                    if modality not in dimensions["token_modalities"]:
+                        dummy_inputs.extend((None, None, None))
+                        continue
+                    length = int(config.get(f"profile_token_length_{modality}", profile_window))
+                    center = int(config.get(f"profile_variant_index_{modality}", profile_center))
+                    dummy_inputs.extend([
+                        torch.zeros((1, 2, length, dimensions[f"token_{modality}"]), device=device),
+                        torch.ones((1, 2, length), dtype=torch.bool, device=device),
+                        torch.full((1, 2), center, dtype=torch.long, device=device),
+                    ])
             profiler.profile_pytorch_fusion(model, tuple(dummy_inputs))
     
             for dataset_cfg in datasets:

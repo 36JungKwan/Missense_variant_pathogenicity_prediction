@@ -741,6 +741,7 @@ class FusionBatchPipeline:
         geometry_dna_name=None,
         geometry_protein_name=None,
         load_pooled_embeddings=True,
+        bio_feature_names=None,
     ):
         geometry_active = "geom" in [str(mod).lower() for mod in active_mods]
         selected_geom = set(geom_feature_names or self.geom_feature_names or GEOM_FEATURE_COLUMNS)
@@ -773,6 +774,7 @@ class FusionBatchPipeline:
             geom_feature_names=geom_feature_names or self.geom_feature_names,
             embedding_representation=embedding_representation,
             is_train=is_train,
+            bio_feature_names=bio_feature_names,
         )
         generator = torch.Generator()
         generator.manual_seed(self.seed if loader_seed is None else int(loader_seed))

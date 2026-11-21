@@ -1,0 +1,159 @@
+{
+  "config": {
+    "architecture": "cross_attention_active_branches_dna-protein-bio_v1",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "cross_attention_ablation_feature_28_ablation_Drop_gnomADe_AF_seed_6_config": {
+      "ablation_active_branches": [
+        "dna",
+        "protein",
+        "bio"
+      ],
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 6,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_1001",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_1001",
+      "ref_col": "ref_seq_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "ref_alt_concat",
+    "input_data_signature": {
+      "dna_model": "nt_v1_500m_dna_1001",
+      "embedding_representation": "ref_alt_concat",
+      "geometry_features": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_k": 64,
+      "geometry_root": "geometry_v2_k64_step2_matched",
+      "protein_model": "esm1b_650m_prot_501",
+      "target_config": "B_with_geometry",
+      "token_window_radius": 16
+    },
+    "pipeline_config": {
+      "batch_size": 64,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 5,
+      "weight_decay": 3.380881049679085e-06,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_501",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_501",
+      "ref_col": "prot_ref_seq_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "target_configs": [
+      {
+        "ablation": "drop_feature_gnomADe_AF",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals",
+          "SpliceAI_pred_DS_AG",
+          "SpliceAI_pred_DS_AL",
+          "SpliceAI_pred_DS_DG",
+          "SpliceAI_pred_DS_DL",
+          "SpliceAI_pred_DP_AG",
+          "SpliceAI_pred_DP_AL",
+          "SpliceAI_pred_DP_DG",
+          "SpliceAI_pred_DP_DL",
+          "SpliceAI_pred_DS_max"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "feature_28_ablation_Drop_gnomADe_AF"
+  },
+  "config_sha256": "8100923e4c71dfd8b0138965da3b97fbc19f4331c82aa4ad72de5a812721b6a7",
+  "stage": "module06_cross_attention_ablation_feature_28_ablation_Drop_gnomADe_AF_seed_6",
+  "version": 1
+}

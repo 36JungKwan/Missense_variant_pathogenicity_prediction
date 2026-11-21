@@ -50,7 +50,8 @@ class VariantFusionDataset(Dataset):
                  active_modalities: list = None,
                  geom_feature_names: list = None,
                  embedding_representation: str = "delta",
-                 is_train: bool = True):
+                 is_train: bool = True,
+                 bio_feature_names: list = None):
         
         self.is_train = is_train
         self.embedding_representation = str(embedding_representation).strip().lower()
@@ -70,7 +71,23 @@ class VariantFusionDataset(Dataset):
         # the explicit ``spliceai`` token so old checkpoints remain compatible.
         self.has_bio_core = 'bio' in self.active_mods or 'bio_core' in self.active_mods
         self.has_spliceai = 'spliceai' in self.active_mods
-        self.has_bio = self.has_bio_core or self.has_spliceai
+        available_bio = []
+        if self.has_bio_core:
+            available_bio.extend(BIO_CORE_COLUMNS)
+        if self.has_spliceai:
+            available_bio.extend(SPLICEAI_COLUMNS)
+        self.bio_cols = (
+            list(bio_feature_names) if bio_feature_names is not None else available_bio
+        )
+        unknown_bio = [name for name in self.bio_cols if name not in available_bio]
+        if unknown_bio:
+            raise ValueError(
+                "Bio feature names are incompatible with active modalities or unknown: "
+                f"{unknown_bio}"
+            )
+        if len(set(self.bio_cols)) != len(self.bio_cols):
+            raise ValueError("bio_feature_names must not contain duplicates")
+        self.has_bio = bool(self.bio_cols)
         self.has_geom = 'geom' in self.active_mods
 
         self.geom_feature_names = (
@@ -192,12 +209,6 @@ class VariantFusionDataset(Dataset):
         # 3. GOM NHÓM ĐẶC TRƯNG BẢNG & LỌC NaN
         # =====================================================================
         if self.has_bio:
-            self.bio_cols = []
-            if self.has_bio_core:
-                self.bio_cols.extend(BIO_CORE_COLUMNS)
-            if self.has_spliceai:
-                self.bio_cols.extend(SPLICEAI_COLUMNS)
-
             missing_bio_cols = [col for col in self.bio_cols if col not in self.df.columns]
             if missing_bio_cols:
                 raise KeyError(

@@ -54,17 +54,21 @@ def _window_shard(source_path, destination, radius):
 
 class _WindowTokenDataset(_TokenCacheDataset):
     def __init__(self, base_dataset, cache_index, split_name, dna_model_name,
-                 protein_model_name, radius):
+                 protein_model_name, radius, modalities=None):
         super().__init__(
             base_dataset, cache_index, split_name, dna_model_name, protein_model_name
         )
         self.radius = int(radius)
+        self.modalities = tuple(modalities or ("dna", "protein"))
+        unknown_modalities = set(self.modalities) - {"dna", "protein"}
+        if unknown_modalities:
+            raise ValueError(f"Unsupported token-window modalities: {sorted(unknown_modalities)}")
         if self.radius < 0:
             raise ValueError("Token window radius must be non-negative")
         self.windows = {}
         self.window_masks = {}
         base_ids = self.df["Variant_ID"].astype(str).tolist()
-        for modality in ("dna", "protein"):
+        for modality in self.modalities:
             started = time.perf_counter()
             grouped = defaultdict(list)
             for output_row, variant_id in enumerate(base_ids):
@@ -110,7 +114,7 @@ class _WindowTokenDataset(_TokenCacheDataset):
             indices = [indices]
         batch = default_collate([self.base_dataset[index] for index in indices])
         rows = torch.as_tensor(indices, dtype=torch.long)
-        for modality in ("dna", "protein"):
+        for modality in self.modalities:
             batch[f"token_{modality}"] = self.windows[modality].index_select(0, rows)
             batch[f"token_{modality}_mask"] = self.window_masks[modality].index_select(0, rows)
             batch[f"token_{modality}_variant_index"] = torch.full(
@@ -120,9 +124,11 @@ class _WindowTokenDataset(_TokenCacheDataset):
 
 
 def add_window_cache_to_loader(loader, token_index, split_name, dna_model_name,
-                               protein_model_name, is_train, batch_size, radius):
+                               protein_model_name, is_train, batch_size, radius,
+                               modalities=None):
     dataset = _WindowTokenDataset(
-        loader.dataset, token_index, split_name, dna_model_name, protein_model_name, radius
+        loader.dataset, token_index, split_name, dna_model_name, protein_model_name,
+        radius, modalities=modalities,
     )
     sampler = (
         RandomSampler(dataset, generator=loader.generator)

@@ -1,0 +1,136 @@
+{
+  "config": {
+    "architecture": "cross_attention_active_branches_bio_v1",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "cross_attention_ablation_modality_ablation_Bio_Core_Only_seed_5_config": {
+      "ablation_active_branches": [
+        "bio"
+      ],
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 5,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_1001",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_1001",
+      "ref_col": "ref_seq_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "ref_alt_concat",
+    "input_data_signature": {
+      "dna_model": "nt_v1_500m_dna_1001",
+      "embedding_representation": "ref_alt_concat",
+      "geometry_features": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_k": 64,
+      "geometry_root": "geometry_v2_k64_step2_matched",
+      "protein_model": "esm1b_650m_prot_501",
+      "target_config": "B_with_geometry",
+      "token_window_radius": 16
+    },
+    "pipeline_config": {
+      "batch_size": 64,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 5,
+      "weight_decay": 3.380881049679085e-06,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_501",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_501",
+      "ref_col": "prot_ref_seq_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "target_configs": [
+      {
+        "ablation": "Bio_Core_Only",
+        "active_modalities": [
+          "bio_core"
+        ],
+        "bio_feature_names": [
+          "AF",
+          "gnomADe_AF",
+          "phyloP100way_vertebrate",
+          "phyloP470way_mammalian",
+          "phyloP17way_primate",
+          "phastCons100way_vertebrate",
+          "phastCons470way_mammalian",
+          "phastCons17way_primate",
+          "GERP++_RS",
+          "GERP++_NR",
+          "GERP_92_mammals"
+        ],
+        "geom_feature_names": [],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "modality_ablation_Bio_Core_Only"
+  },
+  "config_sha256": "d9834d3ec6359058f77fb50808d0b570789f86ffdb7cd057f38eb1c5cf0b7295",
+  "stage": "module06_cross_attention_ablation_modality_ablation_Bio_Core_Only_seed_5",
+  "version": 1
+}
