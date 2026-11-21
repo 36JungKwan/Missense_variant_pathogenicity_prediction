@@ -254,9 +254,9 @@ def build_center_geometry_embeddings(*, model_configs, split_configs, token_cach
 def run_sequence_length_ablation(
     *, pipeline_factory, target_configs, datasets, model_configs, token_cache_index,
     source_configs, source_manifests, step_root, device="cuda", token_batch_size=64,
-    display_fn=print,
+    display_fn=print, dna_lengths=None, protein_lengths=None, seeds=None,
 ):
-    """Run/resume all 25 pairs; source Step 1 checkpoints supply hyperparameters only."""
+    """Run/resume selected length pairs and seeds; Step 1 supplies hyperparameters only."""
     from core.module06_architecture_experiments.architecture_experiment_runner import (
         run_architecture_experiment,
     )
@@ -267,24 +267,34 @@ def run_sequence_length_ablation(
     root = Path(step_root)
     run_root = root / "runs"
     run_root.mkdir(parents=True, exist_ok=True)
+    dna_lengths = tuple(DNA_LENGTHS if dna_lengths is None else map(int, dna_lengths))
+    protein_lengths = tuple(PROTEIN_LENGTHS if protein_lengths is None else map(int, protein_lengths))
+    seeds = tuple(SEEDS if seeds is None else map(int, seeds))
     by_name = {model["name"]: model for model in model_configs}
     dna_models = {
-        length: by_name[f"{DNA_MODEL_BASE}_dna_{length}"] for length in DNA_LENGTHS
+        length: by_name[f"{DNA_MODEL_BASE}_dna_{length}"] for length in dna_lengths
     }
     protein_models = {
-        length: by_name[f"{PROTEIN_MODEL_BASE}_prot_{length}"] for length in PROTEIN_LENGTHS
+        length: by_name[f"{PROTEIN_MODEL_BASE}_prot_{length}"] for length in protein_lengths
     }
+    missing_seed_configs = sorted(set(seeds) - set(map(int, source_configs)))
+    missing_seed_manifests = sorted(set(seeds) - set(map(int, source_manifests)))
+    if missing_seed_configs or missing_seed_manifests:
+        raise KeyError(
+            "Missing source hyperparameter configs/manifests for seeds: "
+            f"configs={missing_seed_configs}, manifests={missing_seed_manifests}"
+        )
     progress_path = root / "step2_run_progress.csv"
     progress = pd.read_csv(progress_path).to_dict("records") if progress_path.is_file() else []
     n_runs = 0
-    for dna_length in DNA_LENGTHS:
-        for protein_length in PROTEIN_LENGTHS:
+    for dna_length in dna_lengths:
+        for protein_length in protein_lengths:
             dna_model = dna_models[dna_length]
             protein_model = protein_models[protein_length]
             run_targets = copy.deepcopy(target_configs)
             run_targets[0]["geometry_dna_name"] = dna_model["name"]
             run_targets[0]["geometry_protein_name"] = protein_model["name"]
-            for seed in SEEDS:
+            for seed in seeds:
                 experiment_key = (
                     f"step2_nt_v1_dna{dna_length}_esm1b_prot{protein_length}_seed{seed}"
                 )
@@ -383,6 +393,11 @@ def summarize_sequence_length_ablation(*, step_root, seeds=SEEDS):
         frame["Sequence_Ablation_Source"] = frame.get(
             "Sequence_Ablation_Source", pd.Series(index=frame.index, dtype=object)
         ).fillna("step2_run")
+    # `seeds` defines the reporting cohort. Extra exploratory seed folders can
+    # remain on disk without silently inflating the reported mean/std.
+    selected_seeds = set(map(int, seeds))
+    validation = validation.loc[validation["Seed"].isin(selected_seeds)].copy()
+    test = test.loc[test["Seed"].isin(selected_seeds)].copy()
     validation = validation.drop_duplicates(["DNA_Length", "Protein_Length", "Seed", "Target_Config"], keep="last")
     test = test.drop_duplicates(["DNA_Length", "Protein_Length", "Seed", "Target_Config", "Dataset"], keep="last")
     expected_test_datasets = {
@@ -411,13 +426,15 @@ def summarize_sequence_length_ablation(*, step_root, seeds=SEEDS):
     )
     validation_summary.to_csv(root / "step2_validation_mean_std_by_combo.csv", index=False)
     test_summary.to_csv(root / "step2_test_mean_std_by_combo_dataset.csv", index=False)
+    expected_seeds = set(map(int, seeds))
     completeness = {}
     for combo, combo_rows in test.groupby(["DNA_Length", "Protein_Length"]):
         seed_complete = combo_rows.groupby("Seed")["Dataset"].agg(
             lambda values: set(values) == expected_test_datasets
         )
-        completeness[combo] = (
-            len(seed_complete) == len(seeds) and bool(seed_complete.all())
+        available_seeds = set(map(int, seed_complete.index))
+        completeness[combo] = expected_seeds.issubset(available_seeds) and bool(
+            seed_complete.reindex(sorted(expected_seeds), fill_value=False).all()
         )
     inventory = validation.groupby(["DNA_Length", "Protein_Length"]).agg(
         Validation_Seeds=("Seed", "nunique"),

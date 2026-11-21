@@ -1,0 +1,145 @@
+{
+  "config": {
+    "architecture": "cross_attention_3modal_fm_pooling_ablation",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_1001",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_1001",
+      "ref_col": "ref_seq_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "ref_alt_concat",
+    "input_data_signature": {
+      "dna_length": 1001,
+      "dna_model": "nt_v1_500m_dna_1001",
+      "effective_batch_size": 64,
+      "geometry_context": "train3",
+      "geometry_features": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_root": "geometry_v2_k64_step2_matched",
+      "input_mode": "window_radius8_len17",
+      "output_pooling_after_cross_attention": "mean",
+      "pooled_vector_manifest": null,
+      "protein_length": 501,
+      "protein_model": "esm1b_650m_prot_501",
+      "source_step2_hyperparameter_manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed5\\_resume_manifest.json",
+      "stage": "step3_pooling_ablation",
+      "token_cache_index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\fm_ablation_token_cache_index.json",
+      "token_cache_manifests": [
+        "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train3\\manifest.json",
+        "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train3\\manifest.json"
+      ],
+      "token_window_radius": 8
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 5,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 8
+    },
+    "pooling": "center",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_501",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_501",
+      "ref_col": "prot_ref_seq_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "step3_pooling_window_radius8_len17_seed5_config": {
+      "attention_dropout": 0.18776012701077605,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "gradient_accumulation_steps": 1,
+      "input_mode": "window_radius8_len17",
+      "k_radius": 8,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "max_relative_radius": 600,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 5,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_root": "geometry_v2_k64_step2_matched",
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "window_radius8_len17_ref_alt_concat"
+  },
+  "config_sha256": "454e1591842255e27969303e56b352b0908e62c25a0d6d3347a6a2bba7231612",
+  "stage": "module06_step3_pooling_window_radius8_len17_seed5",
+  "version": 1
+}

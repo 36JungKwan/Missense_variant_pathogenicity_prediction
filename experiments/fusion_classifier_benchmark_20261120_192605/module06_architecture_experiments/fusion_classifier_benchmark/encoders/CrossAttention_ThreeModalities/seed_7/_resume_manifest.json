@@ -1,0 +1,136 @@
+{
+  "config": {
+    "architecture": "fixed_CrossAttention_ThreeModalities_ref_alt_concat_B_geometry_v1",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_1001",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_1001",
+      "ref_col": "ref_seq_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "ref_alt_concat",
+    "fusion_classifier_benchmark/encoders/CrossAttention_ThreeModalities/seed_7_config": {
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 7,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "input_data_signature": {
+      "embedding_representation": "ref_alt_concat",
+      "geometry_features": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_k": 64,
+      "geometry_root": "geometry_v2_k64_step2_matched",
+      "target_config": "B_with_geometry",
+      "token_models": [
+        "nt_v1_500m_dna_1001",
+        "esm1b_650m_prot_501"
+      ]
+    },
+    "pipeline_config": {
+      "batch_size": 64,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 5,
+      "weight_decay": 3.380881049679085e-06,
+      "xgb_n_jobs": 1
+    },
+    "pooling": "center",
+    "pretrained_best_epoch": 2,
+    "pretrained_checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed7\\checkpoints\\B_with_geometry\\best_model.pth",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_501",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_501",
+      "ref_col": "prot_ref_seq_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "fixed_ref_alt_concat_b_geometry"
+  },
+  "config_sha256": "ff6c16afc06d4d3a3491e976035ce6f7f38046f534e8d70f84c8982f7f791a30",
+  "stage": "module06_fusion_classifier_benchmark/encoders/CrossAttention_ThreeModalities/seed_7",
+  "version": 1
+}

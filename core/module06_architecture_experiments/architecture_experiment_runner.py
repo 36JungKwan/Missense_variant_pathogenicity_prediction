@@ -187,6 +187,21 @@ def _forward(model, batch, device):
 
 def _attach_token_cache(loader, context, split_name, is_train=False, window_radius=None):
     """Wrap a pooled Module 5 loader with lazy token-cache lookups when requested."""
+    pooled_index = context.get("pooled_fm_vector_index")
+    if pooled_index is not None:
+        from core.module06_architecture_experiments.pooling_ablation_experiment import (
+            add_pooled_vectors_to_loader,
+        )
+        return add_pooled_vectors_to_loader(
+            loader=loader,
+            pooled_index=pooled_index,
+            pooling=context["pooled_fm_pooling"],
+            split_name=split_name,
+            dna_model_name=context["DNA_MODEL"]["name"],
+            protein_model_name=context["PROTEIN_MODEL"]["name"],
+            is_train=is_train,
+            batch_size=context.get("token_batch_size"),
+        )
     token_index = context.get("token_embedding_cache_index")
     if token_index is None:
         return loader
@@ -312,6 +327,7 @@ def run_architecture_experiment(
     context, experiment_config, model_builder, architecture, variant, experiment_key,
     source, display_fn=None, manifest_architecture=None, trial_name=None,
     embedding_representation="delta", evaluate_test=True,
+    pretrained_checkpoint=None, pretrained_best_epoch=None,
 ):
     """Run one architecture on configs A/B and the configured test datasets.
 
@@ -329,13 +345,19 @@ def run_architecture_experiment(
     config = dict(experiment_config)
     display = display_fn or print
     window_radius = (
-        int(config["k_radius"])
+        int(context["token_window_radius"])
+        if context.get("token_window_radius") is not None
+        and context.get("token_embedding_cache_index") is not None
+        else int(config["k_radius"])
         if (
             source == "fm_ablation_step1"
             and variant == "ref_alt_concat_window_33_fixed_hparams"
         ) or (
             source == "fm_ablation_step2"
             and variant == "ref_alt_concat_window_33_sequence_length_ablation"
+        ) or (
+            source == "fm_ablation_step3"
+            and variant.startswith("window_radius")
         )
         else None
     )
@@ -363,16 +385,84 @@ def run_architecture_experiment(
         "embedding_representation": embedding_representation,
         "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
     }
+    if pretrained_checkpoint is not None:
+        signature["pretrained_checkpoint"] = str(Path(pretrained_checkpoint).resolve())
+        signature["pretrained_best_epoch"] = (
+            int(pretrained_best_epoch) if pretrained_best_epoch is not None else None
+        )
     if context.get("input_data_signature") is not None:
         signature["input_data_signature"] = context["input_data_signature"]
     if experiment_key != "film":
         signature["variant"] = variant
-    ensure_stage_signature(stage_dir, f"module06_{experiment_key}", signature)
+    mutable_paths = (
+        ((f"{experiment_key}_config", "batch_size"), ("pipeline_config", "batch_size"))
+        if context.get("allow_batch_size_resume") else ()
+    )
+    ensure_stage_signature(
+        stage_dir, f"module06_{experiment_key}", signature,
+        mutable_paths=mutable_paths,
+    )
 
     validation_rows = pd.read_csv(validation_path).to_dict("records") if validation_path.exists() else []
     test_rows = pd.read_csv(test_path).to_dict("records") if test_path.exists() else []
     history_rows = pd.read_csv(history_path).to_dict("records") if history_path.exists() else []
     prediction_rows = pd.read_csv(predictions_path).to_dict("records") if predictions_path.exists() else []
+
+    # If every target already has its selected checkpoint and complete test
+    # metrics/predictions, return before constructing any eager datasets. This
+    # matters for large embedding tables that otherwise get read on every resume.
+    completed_targets = True
+    for target in targets:
+        target_name = str(target["name"])
+        checkpoint = checkpoint_root / target_name / "best_model.pth"
+        validation_row = next((
+            row for row in validation_rows
+            if str(row.get("Target_Config")) == target_name
+        ), None)
+        if validation_row is None or not checkpoint.is_file():
+            completed_targets = False
+            break
+        for dataset_cfg in datasets if evaluate_test else []:
+            dataset_name = str(dataset_cfg["name"])
+            metric_row = next((
+                row for row in test_rows
+                if str(row.get("Target_Config")) == target_name
+                and str(row.get("Dataset")) == dataset_name
+            ), None)
+            if metric_row is None or any(
+                pd.isna(metric_row.get(column))
+                for column in ("MCC", "AUROC", "AUPRC")
+            ):
+                completed_targets = False
+                break
+            prediction_n = sum(
+                1 for row in prediction_rows
+                if str(row.get("Target_Config")) == target_name
+                and str(row.get("Dataset")) == dataset_name
+            )
+            # Test metric rows are written only after a whole split was scored;
+            # older rows do not store N_Test_Samples, so any matching prediction
+            # rows are sufficient for those completed legacy outputs.
+            expected_n = (
+                int(float(metric_row["N_Test_Samples"]))
+                if pd.notna(metric_row.get("N_Test_Samples")) else 1
+            )
+            if prediction_n < expected_n:
+                completed_targets = False
+                break
+        if not completed_targets:
+            break
+
+    if completed_targets:
+        print(f"[RESUME] All {architecture} targets and test outputs are complete; skipping data loading and training.")
+        results = {
+            "output_dir": str(stage_dir),
+            "validation_metrics": pd.DataFrame(validation_rows),
+            "test_metrics": pd.DataFrame(test_rows),
+            "epoch_history": pd.DataFrame(history_rows),
+            "test_predictions": pd.DataFrame(prediction_rows),
+        }
+        return results
 
     for target in targets:
         target_name = str(target["name"])
@@ -428,6 +518,10 @@ def run_architecture_experiment(
                 "token_protein": int(train_loader.dataset.token_hidden_sizes["protein"]),
                 "token_cache": True,
             })
+        dimensions_path = model_dir / "input_dimensions.json"
+        dimensions_path.write_text(
+            json.dumps(dimensions, indent=2, sort_keys=True), encoding="utf-8"
+        )
         biological_dim = dimensions["bio"] + dimensions["geometry"]
         model = model_builder(dimensions, config).to(device)
         parameter_count = sum(parameter.numel() for parameter in model.parameters())
@@ -447,7 +541,23 @@ def run_architecture_experiment(
                 factor=float(config["lr_factor"]),
                 patience=int(config["lr_patience"]),
             )
-            if training_state_path.exists():
+            loaded_pretrained_checkpoint = pretrained_checkpoint is not None
+            if loaded_pretrained_checkpoint:
+                source_checkpoint = Path(pretrained_checkpoint)
+                if not source_checkpoint.is_file():
+                    raise FileNotFoundError(f"Pretrained checkpoint is missing: {source_checkpoint}")
+                model.load_state_dict(torch.load(
+                    source_checkpoint, map_location=device, weights_only=True
+                ), strict=True)
+                start_epoch = 0
+                best_mcc = -float("inf")
+                best_epoch = int(pretrained_best_epoch or 1)
+                stale_epochs = 0
+                best_model_state = _cpu_state_dict(model)
+                fit_seconds_before_resume = 0.0
+                training_complete = True
+                print(f"[CHECKPOINT] Reusing pretrained weights without training: {source_checkpoint}")
+            elif training_state_path.exists():
                 training_state = torch.load(
                     training_state_path, map_location="cpu", weights_only=False
                 )
@@ -504,13 +614,33 @@ def run_architecture_experiment(
                         unit="batch",
                         leave=False,
                     )
-                    for batch in train_batches:
-                        optimizer.zero_grad(set_to_none=True)
+                    accumulation_steps = max(1, int(config.get("gradient_accumulation_steps", 1)))
+                    n_train_batches = len(train_loader)
+                    micro_batch_size = int(getattr(train_loader, "batch_size", 0) or 1)
+                    n_train_samples = len(train_loader.dataset)
+                    optimizer.zero_grad(set_to_none=True)
+                    for batch_index, batch in enumerate(train_batches):
                         logits = _forward(model, batch, device)
                         labels = _move(batch, "label", device, required=True).reshape_as(logits)
                         loss = criterion(logits, labels)
-                        loss.backward()
-                        optimizer.step()
+                        if accumulation_steps == 1:
+                            loss.backward()
+                        else:
+                            accumulation_group_start = (batch_index // accumulation_steps) * accumulation_steps
+                            accumulation_group_stop = min(
+                                accumulation_group_start + accumulation_steps, n_train_batches
+                            )
+                            accumulation_group_samples = min(
+                                (accumulation_group_stop - accumulation_group_start) * micro_batch_size,
+                                n_train_samples - accumulation_group_start * micro_batch_size,
+                            )
+                            (loss * int(labels.shape[0]) / max(accumulation_group_samples, 1)).backward()
+                        if (
+                            (batch_index + 1) % accumulation_steps == 0
+                            or batch_index + 1 == n_train_batches
+                        ):
+                            optimizer.step()
+                            optimizer.zero_grad(set_to_none=True)
                         train_batches.set_postfix(loss=f"{loss.item():.4f}")
                         count = int(labels.shape[0])
                         train_loss_sum += float(loss.item()) * count
@@ -622,9 +752,17 @@ def run_architecture_experiment(
                 "Source": source,
                 "Candidate_Level": "single_run",
                 "Seed": int(config["seed"]),
+                "Batch_Size": int(pipeline.config.get("batch_size", config.get("batch_size", 0))),
                 "N_Seeds": 1,
                 "Best_Epoch": best_epoch,
-                "Fit_Seconds": fit_seconds_before_resume + time.perf_counter() - segment_start,
+                "Fit_Seconds": (
+                    0.0 if loaded_pretrained_checkpoint
+                    else fit_seconds_before_resume + time.perf_counter() - segment_start
+                ),
+                "Checkpoint_Source": (
+                    str(Path(pretrained_checkpoint).resolve())
+                    if loaded_pretrained_checkpoint else "trained_in_current_batch"
+                ),
                 "Decision_Threshold": threshold,
                 "Val_MCC": val_mcc,
                 "Parameters": parameter_count,
@@ -661,12 +799,28 @@ def run_architecture_experiment(
                 profile_window = 2 * int(config.get("k_radius", 0)) + 1
                 profile_center = int(config.get("k_radius", 0))
                 dummy_inputs.extend([
-                    torch.zeros((1, 2, profile_window, dimensions["token_dna"]), device=device),
-                    torch.ones((1, 2, profile_window), dtype=torch.bool, device=device),
-                    torch.full((1, 2), profile_center, dtype=torch.long, device=device),
-                    torch.zeros((1, 2, profile_window, dimensions["token_protein"]), device=device),
-                    torch.ones((1, 2, profile_window), dtype=torch.bool, device=device),
-                    torch.full((1, 2), profile_center, dtype=torch.long, device=device),
+                    torch.zeros((
+                        1, 2, int(config.get("profile_token_length_dna", profile_window)),
+                        dimensions["token_dna"],
+                    ), device=device),
+                    torch.ones((
+                        1, 2, int(config.get("profile_token_length_dna", profile_window)),
+                    ), dtype=torch.bool, device=device),
+                    torch.full((
+                        1, 2,
+                    ), int(config.get("profile_variant_index_dna", profile_center)),
+                       dtype=torch.long, device=device),
+                    torch.zeros((
+                        1, 2, int(config.get("profile_token_length_protein", profile_window)),
+                        dimensions["token_protein"],
+                    ), device=device),
+                    torch.ones((
+                        1, 2, int(config.get("profile_token_length_protein", profile_window)),
+                    ), dtype=torch.bool, device=device),
+                    torch.full((
+                        1, 2,
+                    ), int(config.get("profile_variant_index_protein", profile_center)),
+                       dtype=torch.long, device=device),
                 ])
             profiler.profile_pytorch_fusion(model, tuple(dummy_inputs))
     
@@ -739,6 +893,7 @@ def run_architecture_experiment(
                     "Target_Config": target_name,
                     "Ablation": target["ablation"],
                     "Dataset": dataset_name,
+                    "N_Test_Samples": len(y_test),
                     "Pooling": "center",
                     "DNA_Model": dna_model["name"],
                     "Prot_Model": protein_model["name"],
@@ -751,6 +906,7 @@ def run_architecture_experiment(
                     "Source": source,
                     "Candidate_Level": "single_run",
                     "Seed": int(config["seed"]),
+                    "Batch_Size": int(pipeline.config.get("batch_size", config.get("batch_size", 0))),
                     "N_Seeds": 1,
                     "Decision_Threshold": threshold,
                     "Best_Epoch": validation_row["Best_Epoch"],

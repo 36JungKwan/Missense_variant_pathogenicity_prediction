@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "cache_root": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+  "models": {
+    "nt_v1_500m_dna_1001": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 11604,
+        "hidden_size": 1280,
+        "storage_bytes": 20529796800
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 6851,
+        "hidden_size": 1280,
+        "storage_bytes": 12119906704
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 3048,
+        "hidden_size": 1280,
+        "storage_bytes": 5391639104
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 352,
+        "hidden_size": 1280,
+        "storage_bytes": 621875904
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 736,
+        "hidden_size": 1280,
+        "storage_bytes": 1302131200
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 667,
+        "hidden_size": 1280,
+        "storage_bytes": 1179173904
+      }
+    },
+    "esm1b_650m_prot_501": {
+      "train3": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train3",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train3\\manifest.json",
+        "n_samples": 23208,
+        "n_shards": 1451,
+        "hidden_size": 1280,
+        "storage_bytes": 59892936592
+      },
+      "val": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\val",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\val\\manifest.json",
+        "n_samples": 13701,
+        "n_shards": 857,
+        "hidden_size": 1280,
+        "storage_bytes": 35358200432
+      },
+      "test": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\test",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\test\\manifest.json",
+        "n_samples": 6095,
+        "n_shards": 381,
+        "hidden_size": 1280,
+        "storage_bytes": 15729383088
+      },
+      "clinvarhq": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\clinvarhq",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\clinvarhq\\manifest.json",
+        "n_samples": 703,
+        "n_shards": 44,
+        "hidden_size": 1280,
+        "storage_bytes": 1814234432
+      },
+      "proteingym": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\proteingym",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\proteingym\\manifest.json",
+        "n_samples": 1472,
+        "n_shards": 92,
+        "hidden_size": 1280,
+        "storage_bytes": 3798794368
+      },
+      "uniprot": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\uniprot",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\uniprot\\manifest.json",
+        "n_samples": 1333,
+        "n_shards": 84,
+        "hidden_size": 1280,
+        "storage_bytes": 3440079552
+      }
+    }
+  },
+  "index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605\\module06_architecture_experiments\\fm_ablation_token_cache_index.json"
+}

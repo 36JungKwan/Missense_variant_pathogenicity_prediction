@@ -38,12 +38,38 @@ def _jsonable(value: Any):
         return value
     return repr(value)
 
-def ensure_stage_signature(stage_dir: str | Path, stage_name: str, config: dict):
-    """Create/check a stage manifest; reject reusing artifacts with changed settings."""
+def _without_mutable_paths(config: dict, mutable_paths):
+    """Copy a JSON-safe config while removing explicitly mutable leaf paths."""
+    value = _jsonable(config)
+    for path_parts in mutable_paths or ():
+        current = value
+        for part in tuple(path_parts)[:-1]:
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(str(part))
+        if isinstance(current, dict) and path_parts:
+            current.pop(str(tuple(path_parts)[-1]), None)
+    return value
+
+
+def ensure_stage_signature(
+    stage_dir: str | Path,
+    stage_name: str,
+    config: dict,
+    mutable_paths=(),
+):
+    """Create/check a manifest, optionally allowing selected config leaves to change.
+
+    Mutable leaves are still written to the manifest, but excluded from its
+    compatibility hash. This is intended for settings such as batch size that
+    can change safely when resuming from a saved epoch boundary.
+    """
     directory = Path(stage_dir)
     directory.mkdir(parents=True, exist_ok=True)
     config_value = _jsonable(config)
-    canonical = json.dumps(config_value, sort_keys=True, separators=(",", ":"))
+    signature_value = _without_mutable_paths(config_value, mutable_paths)
+    canonical = json.dumps(signature_value, sort_keys=True, separators=(",", ":"))
     manifest = {
         "version": MANIFEST_VERSION,
         "stage": stage_name,
@@ -53,11 +79,23 @@ def ensure_stage_signature(stage_dir: str | Path, stage_name: str, config: dict)
     path = directory / "_resume_manifest.json"
     if path.exists():
         existing = json.loads(path.read_text(encoding="utf-8"))
-        if existing.get("stage") != stage_name or existing.get("config_sha256") != manifest["config_sha256"]:
+        existing_signature = _without_mutable_paths(
+            existing.get("config", {}), mutable_paths
+        )
+        existing_canonical = json.dumps(
+            existing_signature, sort_keys=True, separators=(",", ":")
+        )
+        existing_hash = hashlib.sha256(existing_canonical.encode("utf-8")).hexdigest()
+        if existing.get("stage") != stage_name or existing_hash != manifest["config_sha256"]:
             raise ValueError(
                 f"Cannot resume {stage_name} in {directory}: its saved configuration differs. "
                 "Use the original settings or start a new batch run."
             )
+        # Migrate compatible older manifests and record the latest mutable value.
+        if existing.get("config_sha256") != manifest["config_sha256"] or existing.get("config") != config_value:
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, path)
         return path
     legacy_artifacts = any(p.is_file() and p.name != path.name for p in directory.iterdir())
     if legacy_artifacts:

@@ -67,7 +67,7 @@ class LowRankMultimodalFusion(nn.Module):
         value = torch.cat((value, bias), dim=-1)
         return layer(value).view(value.shape[0], self.rank, self.fusion_dim)
 
-    def forward(
+    def encode_features(
         self,
         v_dna: torch.Tensor,
         v_protein: torch.Tensor,
@@ -88,5 +88,13 @@ class LowRankMultimodalFusion(nn.Module):
         biological_factor = self._factor(h_bio, self.biological_factor)
         interaction = (dna_factor * protein_factor * biological_factor).sum(dim=1)
 
-        fused = self.interaction_dropout(self.interaction_norm(interaction))
-        return self.classifier(fused)
+        return self.interaction_dropout(self.interaction_norm(interaction))
+
+    def forward(
+        self,
+        v_dna: torch.Tensor,
+        v_protein: torch.Tensor,
+        bio_features: torch.Tensor,
+        geom_features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.classifier(self.encode_features(v_dna, v_protein, bio_features, geom_features))

@@ -108,14 +108,13 @@ class RouterExpertCorrection(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(
+    def _forward_components(
         self,
         v_dna: torch.Tensor,
         v_protein: torch.Tensor,
         bio_features: torch.Tensor,
         geom_features: torch.Tensor | None = None,
-        return_components: bool = False,
-    ):
+    ) -> dict[str, torch.Tensor]:
         biological_input = (
             torch.cat((bio_features, geom_features), dim=-1)
             if geom_features is not None
@@ -125,7 +124,6 @@ class RouterExpertCorrection(nn.Module):
         h_protein = self.protein_projection(v_protein)
         h_bio = self.biological_projection(biological_input)
         joint = torch.cat((h_dna, h_protein, h_bio), dim=-1)
-
         expert_logits = torch.cat((
             self.dna_expert(h_dna),
             self.protein_expert(h_protein),
@@ -137,15 +135,49 @@ class RouterExpertCorrection(nn.Module):
         )
         base_logit = (router_weights * expert_logits).sum(dim=-1, keepdim=True)
         delta_joint_logit = self.correction(joint)
-        final_logit = base_logit + self.beta * delta_joint_logit
+        return {
+            "logit": base_logit + self.beta * delta_joint_logit,
+            "base_logit": base_logit,
+            "expert_logits": expert_logits,
+            "router_weights": router_weights,
+            "delta_joint_logit": delta_joint_logit,
+            "joint_embedding": joint,
+        }
+
+    def encode_features(
+        self,
+        v_dna: torch.Tensor,
+        v_protein: torch.Tensor,
+        bio_features: torch.Tensor,
+        geom_features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        components = self._forward_components(v_dna, v_protein, bio_features, geom_features)
+        return torch.cat((
+            components["joint_embedding"],
+            components["expert_logits"],
+            components["router_weights"],
+            components["base_logit"],
+            components["delta_joint_logit"],
+        ), dim=-1)
+
+    def forward(
+        self,
+        v_dna: torch.Tensor,
+        v_protein: torch.Tensor,
+        bio_features: torch.Tensor,
+        geom_features: torch.Tensor | None = None,
+        return_components: bool = False,
+    ):
+        components = self._forward_components(v_dna, v_protein, bio_features, geom_features)
+        final_logit = components["logit"]
 
         if return_components:
             return {
                 "logit": final_logit,
-                "base_logit": base_logit,
-                "expert_logits": expert_logits,
-                "router_weights": router_weights,
-                "delta_joint_logit": delta_joint_logit,
+                "base_logit": components["base_logit"],
+                "expert_logits": components["expert_logits"],
+                "router_weights": components["router_weights"],
+                "delta_joint_logit": components["delta_joint_logit"],
                 "beta": self.beta,
             }
         return final_logit

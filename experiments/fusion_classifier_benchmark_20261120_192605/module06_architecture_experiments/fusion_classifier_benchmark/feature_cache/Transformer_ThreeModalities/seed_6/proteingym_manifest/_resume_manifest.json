@@ -1,0 +1,54 @@
+{
+  "config": {
+    "embedding_representation": "ref_alt_concat",
+    "fusion": "Transformer_ThreeModalities",
+    "model_config": {
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 6,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "seed": 6,
+    "split": "proteingym",
+    "target": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    },
+    "token_cache_index": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605\\module06_architecture_experiments\\fm_ablation_token_cache_index.json"
+  },
+  "config_sha256": "d04165d2c639d5b53d4c0f9c3bcf7b6b6b6717e1833fbcc558c253affbdb6fee",
+  "stage": "features_Transformer_ThreeModalities_proteingym",
+  "version": 1
+}

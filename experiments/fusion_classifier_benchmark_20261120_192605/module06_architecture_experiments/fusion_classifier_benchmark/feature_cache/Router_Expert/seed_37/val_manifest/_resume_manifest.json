@@ -1,0 +1,60 @@
+{
+  "config": {
+    "embedding_representation": "ref_alt_concat",
+    "fusion": "Router_Expert",
+    "model_config": {
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "beta_init": 0.0,
+      "correction_hidden_dim": 512,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "embedding_dim": 512,
+      "expert_hidden_dim": 512,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "router_hidden_dim": 128,
+      "router_temperature": 1.0,
+      "seed": 37,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "seed": 37,
+    "split": "val",
+    "target": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    },
+    "token_cache_index": null
+  },
+  "config_sha256": "086ba38673cd2499cc04af7963736dc5e2f9edf40bea7a58a5f44580d928ab20",
+  "stage": "features_Router_Expert_val",
+  "version": 1
+}

@@ -1,0 +1,76 @@
+{
+  "config": {
+    "classifier": "XGBoost",
+    "classifier_parameters": {
+      "colsample_bytree": 0.4252579869859605,
+      "early_stopping_rounds": 150,
+      "eval_metric": "logloss",
+      "learning_rate": 0.0342316475539993,
+      "max_depth": 10,
+      "min_child_weight": 18.923444483491057,
+      "n_estimators": 2000,
+      "n_jobs": 1,
+      "objective": "binary:logistic",
+      "random_state": 37,
+      "reg_lambda": 10.0,
+      "scale_pos_weight": 1.0,
+      "subsample": 0.8,
+      "tree_method": "hist",
+      "verbosity": 0
+    },
+    "encoder_checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605\\module06_architecture_experiments\\fusion_classifier_benchmark\\encoders\\LowRank\\seed_37\\checkpoints\\B_with_geometry\\best_model.pth",
+    "feature_representation": "frozen_fusion_encode_features_ref_alt_concat",
+    "fusion": "LowRank",
+    "legacy_parameter_source": {
+      "params": {
+        "colsample_bytree": 0.4252579869859605,
+        "early_stopping_rounds": 150,
+        "eval_metric": "logloss",
+        "learning_rate": 0.0342316475539993,
+        "max_depth": 10,
+        "min_child_weight": 18.923444483491057,
+        "n_estimators": 2000,
+        "n_jobs": 1,
+        "objective": "binary:logistic",
+        "random_state": 42,
+        "reg_lambda": 10.0,
+        "scale_pos_weight": 1.0,
+        "subsample": 0.8,
+        "tree_method": "hist",
+        "verbosity": 0
+      },
+      "source_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\optimization_fixed_config_20261018_064727\\xgb_no_pca\\xgb_no_pca_grid_trials.csv",
+      "source_pca": false,
+      "source_target_config": "B_with_geometry",
+      "source_trial": "optuna_0017",
+      "source_val_mcc": 0.8343
+    },
+    "seed": 37,
+    "target_config": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    }
+  },
+  "config_sha256": "329a13a48a4010100eea137c10a2cfb6391342ec29b0cbcb50bc848440a01f1f",
+  "stage": "fixed_head_LowRank_XGBoost_seed_37",
+  "version": 1
+}

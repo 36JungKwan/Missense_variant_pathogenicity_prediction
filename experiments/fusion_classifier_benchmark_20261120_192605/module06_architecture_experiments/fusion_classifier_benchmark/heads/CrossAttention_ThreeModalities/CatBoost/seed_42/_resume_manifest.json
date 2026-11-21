@@ -1,0 +1,70 @@
+{
+  "config": {
+    "classifier": "CatBoost",
+    "classifier_parameters": {
+      "allow_writing_files": false,
+      "depth": 9,
+      "eval_metric": "Logloss",
+      "iterations": 2000,
+      "l2_leaf_reg": 8.216330558294183,
+      "learning_rate": 0.02164113007259359,
+      "loss_function": "Logloss",
+      "random_seed": 42,
+      "random_strength": 1.0,
+      "rsm": 0.7441590696070868,
+      "thread_count": 8,
+      "verbose": false
+    },
+    "encoder_checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605\\module06_architecture_experiments\\fusion_classifier_benchmark\\encoders\\CrossAttention_ThreeModalities\\seed_42\\checkpoints\\B_with_geometry\\best_model.pth",
+    "feature_representation": "frozen_fusion_encode_features_ref_alt_concat",
+    "fusion": "CrossAttention_ThreeModalities",
+    "legacy_parameter_source": {
+      "params": {
+        "allow_writing_files": false,
+        "depth": 9,
+        "eval_metric": "Logloss",
+        "iterations": 2000,
+        "l2_leaf_reg": 8.216330558294183,
+        "learning_rate": 0.02164113007259359,
+        "loss_function": "Logloss",
+        "random_seed": 42,
+        "random_strength": 1.0,
+        "rsm": 0.7441590696070868,
+        "thread_count": 8,
+        "verbose": false
+      },
+      "source_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\optimization_fixed_config_20261018_064727\\catboost\\catboost_grid_trials.csv",
+      "source_pca": false,
+      "source_target_config": "B_with_geometry",
+      "source_trial": "optuna_0020",
+      "source_val_mcc": 0.8309
+    },
+    "seed": 42,
+    "target_config": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    }
+  },
+  "config_sha256": "1ea0427d7725244b771c70ef1352de2c08e8d0ebfcec068c09693ab73d851ba9",
+  "stage": "fixed_head_CrossAttention_ThreeModalities_CatBoost_seed_42",
+  "version": 1
+}

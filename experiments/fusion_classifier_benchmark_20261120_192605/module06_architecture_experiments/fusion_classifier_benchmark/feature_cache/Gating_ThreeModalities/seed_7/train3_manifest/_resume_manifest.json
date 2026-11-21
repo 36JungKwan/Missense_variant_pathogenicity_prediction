@@ -1,0 +1,54 @@
+{
+  "config": {
+    "embedding_representation": "ref_alt_concat",
+    "fusion": "Gating_ThreeModalities",
+    "model_config": {
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 7,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "seed": 7,
+    "split": "train3",
+    "target": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    },
+    "token_cache_index": null
+  },
+  "config_sha256": "f51d116aa3fa76c413cfaa7f0bd1a23895e82f562042d0058ac9b9fd9a0a2486",
+  "stage": "features_Gating_ThreeModalities_train3",
+  "version": 1
+}

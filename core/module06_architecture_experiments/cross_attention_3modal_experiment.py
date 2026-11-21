@@ -144,10 +144,10 @@ class CrossAttentionThreeModalities(nn.Module):
             return (tokens * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
         raise ValueError(f"Unsupported Cross-Attention pooling mode: {mode}")
 
-    def forward(self, v_dna, v_prot, bio_features, geom_features=None,
-                token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
-                token_protein=None, token_protein_mask=None,
-                token_protein_variant_index=None):
+    def encode_features(self, v_dna, v_prot, bio_features, geom_features=None,
+                        token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
+                        token_protein=None, token_protein_mask=None,
+                        token_protein_variant_index=None):
         if token_dna is None or token_protein is None:
             raise ValueError("CrossAttentionThreeModalities requires both FM token caches.")
         dna, dna_mask = self.dna_window(
@@ -193,7 +193,18 @@ class CrossAttentionThreeModalities(nn.Module):
         )
         bio_vector = self._pool(bio, bio_mask, self.pooling, self.pool_scores["bio"])
         fused = self.output_norm(torch.cat((dna_vector, protein_vector, bio_vector), dim=1))
-        return self.classifier(fused).squeeze(-1)
+        return fused
+
+    def forward(self, v_dna, v_prot, bio_features, geom_features=None,
+                token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
+                token_protein=None, token_protein_mask=None,
+                token_protein_variant_index=None):
+        features = self.encode_features(
+            v_dna, v_prot, bio_features, geom_features,
+            token_dna, token_dna_mask, token_dna_variant_index,
+            token_protein, token_protein_mask, token_protein_variant_index,
+        )
+        return self.classifier(features).squeeze(-1)
 
 
 def _builder(dimensions, config):

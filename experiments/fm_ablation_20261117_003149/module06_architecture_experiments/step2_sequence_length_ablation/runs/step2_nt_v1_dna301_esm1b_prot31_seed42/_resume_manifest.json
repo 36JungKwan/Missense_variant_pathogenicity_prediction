@@ -1,0 +1,138 @@
+{
+  "config": {
+    "architecture": "cross_attention_3modal_ref_alt_concat_window33_sequence_length_ablation",
+    "checkpoint_selection": "validation_mcc_optimized_threshold_v2",
+    "datasets": [
+      {
+        "name": "Train3Val_Test",
+        "test": "test",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ClinVarHQ",
+        "test": "clinvarhq",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_ProteinGym",
+        "test": "proteingym",
+        "train": "train3",
+        "val": "val"
+      },
+      {
+        "name": "Train3Val_UniProt",
+        "test": "uniprot",
+        "train": "train3",
+        "val": "val"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_301",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_301",
+      "ref_col": "ref_seq_301",
+      "seq_type": "dna",
+      "sequence_length": 301
+    },
+    "embedding_representation": "ref_alt_concat",
+    "input_data_signature": {
+      "dna_sequence_length": 301,
+      "dna_token_model": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "geometry_context": "train3",
+      "geometry_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_root": "geometry_v2_k64_step2_matched",
+      "geometry_source_dna": "nt_v1_500m_dna_301",
+      "geometry_source_protein": "esm1b_650m_prot_31",
+      "pooled_fm_inputs": false,
+      "protein_sequence_length": 31,
+      "protein_token_model": "facebook/esm1b_t33_650M_UR50S",
+      "source_hyperparameter_manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step1_optuna_nt_v1_dna1001_esm1b_prot501_5seed\\trials\\params_27321c1de5fe2d03_seed_42\\_resume_manifest.json",
+      "stage": "step2_fm_sequence_length_ablation",
+      "token_window": "variant-centered ref/alt, k_radius=16, length=33"
+    },
+    "pipeline_config": {
+      "batch_size": 256,
+      "early_stop_patience": 6,
+      "epochs": 30,
+      "lr": 0.0001,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "num_workers": 0,
+      "seed": 42,
+      "weight_decay": 0.001,
+      "xgb_n_jobs": 8
+    },
+    "pooling": "center",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_31",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_31",
+      "ref_col": "prot_ref_seq_31",
+      "seq_type": "protein",
+      "sequence_length": 31
+    },
+    "step2_nt_v1_dna301_esm1b_prot31_seed42_config": {
+      "attention_dropout": 0.18776012701077605,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "seed": 42,
+      "weight_decay": 3.380881049679085e-06
+    },
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_301",
+        "geometry_protein_name": "esm1b_650m_prot_31",
+        "geometry_root": "geometry_v2_k64_step2_matched",
+        "name": "B_with_geometry"
+      }
+    ],
+    "variant": "ref_alt_concat_window_33_sequence_length_ablation"
+  },
+  "config_sha256": "a366b8dbd9cd0ca84aef7311db7f51371057adf61803132f873651b290bf4ac6",
+  "stage": "module06_step2_nt_v1_dna301_esm1b_prot31_seed42",
+  "version": 1
+}

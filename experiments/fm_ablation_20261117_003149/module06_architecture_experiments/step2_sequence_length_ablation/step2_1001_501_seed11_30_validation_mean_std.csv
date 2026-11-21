@@ -1,0 +1,2 @@
+Target_Config,Val_Accuracy_mean,Val_Accuracy_std,Val_Precision_mean,Val_Precision_std,Val_Recall_mean,Val_Recall_std,Val_Specificity_mean,Val_Specificity_std,Val_F1_Score_mean,Val_F1_Score_std,Val_MCC_mean,Val_MCC_std,Val_AUROC_mean,Val_AUROC_std,Val_AUPRC_mean,Val_AUPRC_std,N_Seeds
+B_with_geometry,0.942755,0.0013184819819937253,0.855435,0.016708342542763367,0.843215,0.01856641775952088,0.966235,0.005260005503299089,0.84895,0.00316950934273492,0.813925,0.003674359951424433,0.9735900000000001,0.001285915606627595,0.918245,0.002570372694663894,20

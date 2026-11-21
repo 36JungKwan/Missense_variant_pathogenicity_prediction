@@ -1,0 +1,73 @@
+{
+  "config": {
+    "classifier": "LightGBM",
+    "classifier_parameters": {
+      "colsample_bytree": 0.4269560174095951,
+      "learning_rate": 0.016656973052378208,
+      "max_depth": -1,
+      "min_child_samples": 35,
+      "n_estimators": 2000,
+      "n_jobs": 1,
+      "num_leaves": 77,
+      "objective": "binary",
+      "random_state": 42,
+      "reg_alpha": 0.0,
+      "reg_lambda": 5.0,
+      "subsample": 0.8,
+      "subsample_freq": 1,
+      "verbosity": -1
+    },
+    "encoder_checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605\\module06_architecture_experiments\\fusion_classifier_benchmark\\encoders\\Transformer_ThreeModalities\\seed_42\\checkpoints\\B_with_geometry\\best_model.pth",
+    "feature_representation": "frozen_fusion_encode_features_ref_alt_concat",
+    "fusion": "Transformer_ThreeModalities",
+    "legacy_parameter_source": {
+      "params": {
+        "colsample_bytree": 0.4269560174095951,
+        "learning_rate": 0.016656973052378208,
+        "max_depth": -1,
+        "min_child_samples": 35,
+        "n_estimators": 2000,
+        "n_jobs": 1,
+        "num_leaves": 77,
+        "objective": "binary",
+        "reg_alpha": 0.0,
+        "reg_lambda": 5.0,
+        "subsample": 0.8,
+        "subsample_freq": 1,
+        "verbosity": -1
+      },
+      "source_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\optimization_fixed_config_20261018_064727\\lightgbm\\lightgbm_grid_trials.csv",
+      "source_pca": false,
+      "source_target_config": "B_with_geometry",
+      "source_trial": "optuna_0016",
+      "source_val_mcc": 0.8342
+    },
+    "seed": 42,
+    "target_config": {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    }
+  },
+  "config_sha256": "101f2980e1b98abc242b856a2a8a6fc1ac856d0f30cb52553edb19d3ba1ae551",
+  "stage": "fixed_head_Transformer_ThreeModalities_LightGBM_seed_42",
+  "version": 1
+}

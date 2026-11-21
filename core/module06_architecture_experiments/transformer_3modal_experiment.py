@@ -110,10 +110,10 @@ class TransformerThreeModalities(nn.Module):
             nn.Linear(max(model_dim // 2, 32), 1),
         )
 
-    def forward(self, v_dna, v_prot, bio_features, geom_features=None,
-                token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
-                token_protein=None, token_protein_mask=None,
-                token_protein_variant_index=None):
+    def encode_features(self, v_dna, v_prot, bio_features, geom_features=None,
+                        token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
+                        token_protein=None, token_protein_mask=None,
+                        token_protein_variant_index=None):
         if token_dna is None or token_protein is None:
             raise ValueError("TransformerThreeModalities requires both FM token caches.")
         dna, dna_mask = self.dna_window(
@@ -147,7 +147,18 @@ class TransformerThreeModalities(nn.Module):
             pooled = (encoded * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
         else:
             raise ValueError(f"Unsupported Transformer pooling mode: {self.pooling}")
-        return self.classifier(self.output_norm(pooled)).squeeze(-1)
+        return self.output_norm(pooled)
+
+    def forward(self, v_dna, v_prot, bio_features, geom_features=None,
+                token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
+                token_protein=None, token_protein_mask=None,
+                token_protein_variant_index=None):
+        features = self.encode_features(
+            v_dna, v_prot, bio_features, geom_features,
+            token_dna, token_dna_mask, token_dna_variant_index,
+            token_protein, token_protein_mask, token_protein_variant_index,
+        )
+        return self.classifier(features).squeeze(-1)
 
 
 def _builder(dimensions, config):

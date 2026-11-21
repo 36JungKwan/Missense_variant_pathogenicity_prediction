@@ -74,7 +74,7 @@ class BiologyConditionedFiLM(nn.Module):
         self.head_dropout = nn.Dropout(dropout)
         self.output = nn.Linear(head_dim, 1)
 
-    def forward(
+    def encode_features(
         self,
         v_dna: torch.Tensor,
         v_protein: torch.Tensor,
@@ -103,5 +103,14 @@ class BiologyConditionedFiLM(nn.Module):
 
         fused = torch.cat([h_dna_film, h_protein_film, h_bio], dim=-1)
         hidden = self.head_activation(self.head_main(fused) + self.head_skip(fused))
-        return self.output(self.head_dropout(hidden))
+        return self.head_dropout(hidden)
+
+    def forward(
+        self,
+        v_dna: torch.Tensor,
+        v_protein: torch.Tensor,
+        bio_features: torch.Tensor,
+        geom_features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.output(self.encode_features(v_dna, v_protein, bio_features, geom_features))
 

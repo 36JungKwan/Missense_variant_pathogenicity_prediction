@@ -1,0 +1,238 @@
+{
+  "batch_size_change_allowed": true,
+  "batch_size_history": [
+    {
+      "batch_size": 128,
+      "recorded_at_utc": "2026-11-20T17:36:09Z"
+    },
+    {
+      "batch_size": 64,
+      "recorded_at_utc": "2026-11-20T17:57:16Z"
+    }
+  ],
+  "current_batch_size": 64,
+  "datasets": [
+    {
+      "name": "Train3Val_Test",
+      "test": "test",
+      "train": "train3",
+      "val": "val"
+    },
+    {
+      "name": "Train3Val_ClinVarHQ",
+      "test": "clinvarhq",
+      "train": "train3",
+      "val": "val"
+    },
+    {
+      "name": "Train3Val_ProteinGym",
+      "test": "proteingym",
+      "train": "train3",
+      "val": "val"
+    },
+    {
+      "name": "Train3Val_UniProt",
+      "test": "uniprot",
+      "train": "train3",
+      "val": "val"
+    }
+  ],
+  "dna_model": {
+    "alt_col": "alt_seq_1001",
+    "batch_size": 32,
+    "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+    "model_type": "mlm",
+    "name": "nt_v1_500m_dna_1001",
+    "ref_col": "ref_seq_1001",
+    "seq_type": "dna",
+    "sequence_length": 1001
+  },
+  "embedding_representation": "ref_alt_concat",
+  "fixed_model_config": {
+    "attention_dropout": 0.18776012701077605,
+    "batch_size": 64,
+    "dropout": 0.1955626033738947,
+    "early_stop_patience": 6,
+    "feature_dropout": 0.2507543060224074,
+    "ffn_multiplier": 4,
+    "k_radius": 16,
+    "learning_rate": 0.00012206472463506827,
+    "lr_factor": 0.5,
+    "lr_patience": 3,
+    "max_epochs": 30,
+    "model_dim": 512,
+    "num_heads": 8,
+    "num_layers": 3,
+    "pooling": "mean",
+    "weight_decay": 3.380881049679085e-06
+  },
+  "input_data_signature": {
+    "embedding_representation": "ref_alt_concat",
+    "geometry_features": [
+      "dna_LVD_L2",
+      "dna_LVD_Cosine",
+      "dna_LID",
+      "dna_LVD_Relative",
+      "prot_LVD_L2",
+      "prot_LVD_Cosine",
+      "prot_LID",
+      "prot_LVD_Relative"
+    ],
+    "geometry_k": 64,
+    "geometry_root": "geometry_v2_k64_step2_matched",
+    "target_config": "B_with_geometry",
+    "token_models": [
+      "nt_v1_500m_dna_1001",
+      "esm1b_650m_prot_501"
+    ]
+  },
+  "legacy_classifier_params": {
+    "CatBoost": {
+      "params": {
+        "allow_writing_files": false,
+        "depth": 9,
+        "eval_metric": "Logloss",
+        "iterations": 2000,
+        "l2_leaf_reg": 8.216330558294183,
+        "learning_rate": 0.02164113007259359,
+        "loss_function": "Logloss",
+        "random_seed": 42,
+        "random_strength": 1.0,
+        "rsm": 0.7441590696070868,
+        "thread_count": 8,
+        "verbose": false
+      },
+      "source_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\optimization_fixed_config_20261018_064727\\catboost\\catboost_grid_trials.csv",
+      "source_pca": false,
+      "source_target_config": "B_with_geometry",
+      "source_trial": "optuna_0020",
+      "source_val_mcc": 0.8309
+    },
+    "LightGBM": {
+      "params": {
+        "colsample_bytree": 0.4269560174095951,
+        "learning_rate": 0.016656973052378208,
+        "max_depth": -1,
+        "min_child_samples": 35,
+        "n_estimators": 2000,
+        "n_jobs": 1,
+        "num_leaves": 77,
+        "objective": "binary",
+        "reg_alpha": 0.0,
+        "reg_lambda": 5.0,
+        "subsample": 0.8,
+        "subsample_freq": 1,
+        "verbosity": -1
+      },
+      "source_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\optimization_fixed_config_20261018_064727\\lightgbm\\lightgbm_grid_trials.csv",
+      "source_pca": false,
+      "source_target_config": "B_with_geometry",
+      "source_trial": "optuna_0016",
+      "source_val_mcc": 0.8342
+    },
+    "XGBoost": {
+      "params": {
+        "colsample_bytree": 0.4252579869859605,
+        "early_stopping_rounds": 150,
+        "eval_metric": "logloss",
+        "learning_rate": 0.0342316475539993,
+        "max_depth": 10,
+        "min_child_weight": 18.923444483491057,
+        "n_estimators": 2000,
+        "n_jobs": 1,
+        "objective": "binary:logistic",
+        "random_state": 42,
+        "reg_lambda": 10.0,
+        "scale_pos_weight": 1.0,
+        "subsample": 0.8,
+        "tree_method": "hist",
+        "verbosity": 0
+      },
+      "source_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\optimization_fixed_config_20261018_064727\\xgb_no_pca\\xgb_no_pca_grid_trials.csv",
+      "source_pca": false,
+      "source_target_config": "B_with_geometry",
+      "source_trial": "optuna_0017",
+      "source_val_mcc": 0.8343
+    }
+  },
+  "optuna_enabled": false,
+  "pretrained_encoder_checkpoints": {
+    "5": {
+      "best_epoch": 2,
+      "checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed5\\checkpoints\\B_with_geometry\\best_model.pth",
+      "manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed5\\_resume_manifest.json",
+      "source_val_mcc": 0.8209,
+      "validation_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed5\\step2_nt_v1_dna1001_esm1b_prot501_seed5_validation_metrics.csv"
+    },
+    "6": {
+      "best_epoch": 4,
+      "checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed6\\checkpoints\\B_with_geometry\\best_model.pth",
+      "manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed6\\_resume_manifest.json",
+      "source_val_mcc": 0.8238,
+      "validation_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed6\\step2_nt_v1_dna1001_esm1b_prot501_seed6_validation_metrics.csv"
+    },
+    "7": {
+      "best_epoch": 2,
+      "checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed7\\checkpoints\\B_with_geometry\\best_model.pth",
+      "manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed7\\_resume_manifest.json",
+      "source_val_mcc": 0.8235,
+      "validation_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed7\\step2_nt_v1_dna1001_esm1b_prot501_seed7_validation_metrics.csv"
+    },
+    "37": {
+      "best_epoch": 2,
+      "checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed37\\checkpoints\\B_with_geometry\\best_model.pth",
+      "manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed37\\_resume_manifest.json",
+      "source_val_mcc": 0.8243,
+      "validation_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed37\\step2_nt_v1_dna1001_esm1b_prot501_seed37_validation_metrics.csv"
+    },
+    "42": {
+      "best_epoch": 2,
+      "checkpoint": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed42\\checkpoints\\B_with_geometry\\best_model.pth",
+      "manifest": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed42\\_resume_manifest.json",
+      "source_val_mcc": 0.821,
+      "validation_csv": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed42\\step2_nt_v1_dna1001_esm1b_prot501_seed42_validation_metrics.csv"
+    }
+  },
+  "protein_model": {
+    "alt_col": "prot_alt_seq_501",
+    "batch_size": 16,
+    "model_id": "facebook/esm1b_t33_650M_UR50S",
+    "model_type": "mlm",
+    "name": "esm1b_650m_prot_501",
+    "ref_col": "prot_ref_seq_501",
+    "seq_type": "protein",
+    "sequence_length": 501
+  },
+  "seeds": [
+    5,
+    6,
+    7,
+    37,
+    42
+  ],
+  "target_configs": [
+    {
+      "ablation": "bio_core_dna_prot_spliceai_geom",
+      "active_modalities": [
+        "dna",
+        "prot",
+        "bio_core",
+        "spliceai",
+        "geom"
+      ],
+      "geom_feature_names": [
+        "dna_LVD_L2",
+        "dna_LVD_Cosine",
+        "dna_LID",
+        "dna_LVD_Relative",
+        "prot_LVD_L2",
+        "prot_LVD_Cosine",
+        "prot_LID",
+        "prot_LVD_Relative"
+      ],
+      "geometry_dna_name": "nt_v1_500m_dna_1001",
+      "geometry_protein_name": "esm1b_650m_prot_501",
+      "name": "B_with_geometry"
+    }
+  ]
+}
