@@ -223,31 +223,104 @@ def _extract_features(model, loader, device, token_aware):
     }
 
 
-def _fit_fixed_tree(classifier, params, seed, x_train, y_train, x_val, y_val):
+def _fit_fixed_tree(classifier, params, seed, x_train, y_train, x_val, y_val,
+                    execution_config=None, return_execution_device=False):
+    """Fit a tree model with an optional GPU-first, CPU-threaded policy."""
+    apply_hardware_policy = execution_config is not None
+    execution_config = dict(execution_config or {})
+    prefer_gpu = bool(execution_config.get("prefer_gpu", False))
+    fallback_to_cpu = bool(execution_config.get("fallback_to_cpu", True))
+    cpu_threads = max(1, int(execution_config.get("cpu_threads", 16)))
+    gpu_device_id = execution_config.get("gpu_device_id")
+    gpu_ram_part = float(execution_config.get("gpu_ram_part", 0.8))
     effective = dict(params)
     effective.pop("random_state", None)
     effective.pop("random_seed", None)
-    if classifier == "XGBoost":
-        from xgboost import XGBClassifier
-        model = XGBClassifier(**effective, random_state=int(seed))
-        model.fit(x_train, y_train, eval_set=[(x_val, y_val)], verbose=False)
-    elif classifier == "LightGBM":
-        import lightgbm as lgb
-        effective["random_state"] = int(seed)
-        model = lgb.LGBMClassifier(**effective)
-        model.fit(
-            x_train, y_train, eval_set=[(x_val, y_val)], eval_metric="binary_logloss",
-            callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)],
-        )
-    elif classifier == "CatBoost":
-        from catboost import CatBoostClassifier
-        effective["random_seed"] = int(seed)
-        model = CatBoostClassifier(**effective)
-        model.fit(x_train, y_train, eval_set=(x_val, y_val),
-                  early_stopping_rounds=120, verbose=False)
+
+    def fit_on(device):
+        params_for_fit = dict(effective)
+        use_gpu = device == "GPU"
+        if classifier == "XGBoost":
+            import xgboost as xgb
+            from xgboost import XGBClassifier
+            if apply_hardware_policy:
+                params_for_fit.pop("nthread", None)
+                params_for_fit["n_jobs"] = cpu_threads
+            version_major = int(str(xgb.__version__).split(".", 1)[0])
+            if use_gpu and version_major >= 2:
+                params_for_fit["tree_method"] = "hist"
+                params_for_fit["device"] = "cuda"
+                params_for_fit.pop("gpu_id", None)
+            elif use_gpu:
+                params_for_fit.pop("device", None)
+                params_for_fit["tree_method"] = "gpu_hist"
+                if gpu_device_id is not None:
+                    params_for_fit["gpu_id"] = int(gpu_device_id)
+            elif apply_hardware_policy:
+                if version_major >= 2:
+                    params_for_fit["tree_method"] = "hist"
+                    params_for_fit["device"] = "cpu"
+                    params_for_fit.pop("gpu_id", None)
+                else:
+                    params_for_fit.pop("device", None)
+                    params_for_fit.pop("gpu_id", None)
+                    params_for_fit["tree_method"] = "hist"
+            model = XGBClassifier(**params_for_fit, random_state=int(seed))
+            model.fit(x_train, y_train, eval_set=[(x_val, y_val)], verbose=False)
+        elif classifier == "LightGBM":
+            import lightgbm as lgb
+            if apply_hardware_policy:
+                for alias in ("num_threads", "num_thread", "nthread", "device"):
+                    params_for_fit.pop(alias, None)
+                params_for_fit["n_jobs"] = cpu_threads
+                params_for_fit["device_type"] = "gpu" if use_gpu else "cpu"
+            model = lgb.LGBMClassifier(**params_for_fit, random_state=int(seed))
+            model.fit(
+                x_train, y_train, eval_set=[(x_val, y_val)], eval_metric="binary_logloss",
+                callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)],
+            )
+        elif classifier == "CatBoost":
+            from catboost import CatBoostClassifier
+            if apply_hardware_policy:
+                params_for_fit["thread_count"] = cpu_threads
+                params_for_fit["task_type"] = "GPU" if use_gpu else "CPU"
+                if use_gpu:
+                    params_for_fit["gpu_ram_part"] = gpu_ram_part
+                    if gpu_device_id is not None:
+                        params_for_fit["devices"] = str(gpu_device_id)
+                else:
+                    params_for_fit.pop("gpu_ram_part", None)
+                    params_for_fit.pop("devices", None)
+            model = CatBoostClassifier(**params_for_fit, random_seed=int(seed))
+            model.fit(x_train, y_train, eval_set=(x_val, y_val),
+                      early_stopping_rounds=120, verbose=False)
+        else:
+            raise KeyError(f"Unsupported fixed tree classifier: {classifier}")
+        return model
+
+    if prefer_gpu:
+        try:
+            model = fit_on("GPU")
+            used_device = "GPU"
+        except Exception as exc:
+            if not fallback_to_cpu:
+                raise
+            print(
+                f"[GPU fallback] {classifier}: GPU fit unavailable or failed "
+                f"({type(exc).__name__}: {exc}); retrying on CPU with {cpu_threads} threads."
+            )
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            model = fit_on("CPU")
+            used_device = "CPU"
     else:
-        raise KeyError(f"Unsupported fixed tree classifier: {classifier}")
-    return model
+        model = fit_on("CPU")
+        used_device = "CPU"
+    return (model, used_device) if return_execution_device else model
 
 
 def _predict_proba(classifier, model, features):

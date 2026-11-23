@@ -72,16 +72,19 @@ class _CrossAttentionBlock(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, query_tokens, context_tokens, context_mask):
-        update, _ = self.cross_attention(
+    def forward(self, query_tokens, context_tokens, context_mask, return_attention=False):
+        update, attention_weights = self.cross_attention(
             self.query_norm(query_tokens),
             self.context_norm(context_tokens),
             self.context_norm(context_tokens),
             key_padding_mask=~context_mask,
-            need_weights=False,
+            need_weights=bool(return_attention),
+            average_attn_weights=False,
         )
         query_tokens = query_tokens + self.attention_dropout(update)
         query_tokens = query_tokens + self.ffn(self.ffn_norm(query_tokens))
+        if return_attention:
+            return query_tokens, attention_weights
         return query_tokens
 
 
@@ -147,7 +150,7 @@ class CrossAttentionThreeModalities(nn.Module):
     def encode_features(self, v_dna, v_prot, bio_features, geom_features=None,
                         token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
                         token_protein=None, token_protein_mask=None,
-                        token_protein_variant_index=None):
+                        token_protein_variant_index=None, return_attention=False):
         if token_dna is None or token_protein is None:
             raise ValueError("CrossAttentionThreeModalities requires both FM token caches.")
         dna, dna_mask = self.dna_window(
@@ -168,24 +171,51 @@ class CrossAttentionThreeModalities(nn.Module):
                 torch.ones(geometry.shape[:2], dtype=torch.bool, device=geometry.device),
             ), dim=1)
 
-        for layer in self.cross_layers:
+        attention_maps = {}
+        for layer_index, layer in enumerate(self.cross_layers):
             # Compute each update from the same layer input; no modality is updated first.
             old_dna, old_protein, old_bio = dna, protein, bio
-            dna = layer["dna"](
+            dna_result = layer["dna"](
                 old_dna,
                 torch.cat((old_protein, old_bio), dim=1),
                 torch.cat((protein_mask, bio_mask), dim=1),
+                return_attention=return_attention,
             )
-            protein = layer["protein"](
+            protein_result = layer["protein"](
                 old_protein,
                 torch.cat((old_dna, old_bio), dim=1),
                 torch.cat((dna_mask, bio_mask), dim=1),
+                return_attention=return_attention,
             )
-            bio = layer["bio"](
+            bio_result = layer["bio"](
                 old_bio,
                 torch.cat((old_dna, old_protein), dim=1),
                 torch.cat((dna_mask, protein_mask), dim=1),
+                return_attention=return_attention,
             )
+            if return_attention:
+                dna, dna_weights = dna_result
+                protein, protein_weights = protein_result
+                bio, bio_weights = bio_result
+                dna_context_len = old_protein.shape[1]
+                protein_context_len = old_dna.shape[1]
+                bio_context_len = old_dna.shape[1]
+                attention_maps.update({
+                    f"layer_{layer_index + 1}_dna_to_protein":
+                        dna_weights[..., :dna_context_len],
+                    f"layer_{layer_index + 1}_dna_to_bio_geometry":
+                        dna_weights[..., dna_context_len:],
+                    f"layer_{layer_index + 1}_protein_to_dna":
+                        protein_weights[..., :protein_context_len],
+                    f"layer_{layer_index + 1}_protein_to_bio_geometry":
+                        protein_weights[..., protein_context_len:],
+                    f"layer_{layer_index + 1}_bio_geometry_to_dna":
+                        bio_weights[..., :bio_context_len],
+                    f"layer_{layer_index + 1}_bio_geometry_to_protein":
+                        bio_weights[..., bio_context_len:],
+                })
+            else:
+                dna, protein, bio = dna_result, protein_result, bio_result
 
         dna_vector = self._pool(dna, dna_mask, self.pooling, self.pool_scores["dna"])
         protein_vector = self._pool(
@@ -193,18 +223,24 @@ class CrossAttentionThreeModalities(nn.Module):
         )
         bio_vector = self._pool(bio, bio_mask, self.pooling, self.pool_scores["bio"])
         fused = self.output_norm(torch.cat((dna_vector, protein_vector, bio_vector), dim=1))
+        if return_attention:
+            return fused, attention_maps
         return fused
 
     def forward(self, v_dna, v_prot, bio_features, geom_features=None,
                 token_dna=None, token_dna_mask=None, token_dna_variant_index=None,
                 token_protein=None, token_protein_mask=None,
-                token_protein_variant_index=None):
-        features = self.encode_features(
+                token_protein_variant_index=None, return_attention=False):
+        encoded = self.encode_features(
             v_dna, v_prot, bio_features, geom_features,
             token_dna, token_dna_mask, token_dna_variant_index,
             token_protein, token_protein_mask, token_protein_variant_index,
+            return_attention=return_attention,
         )
-        return self.classifier(features).squeeze(-1)
+        if return_attention:
+            features, attention_maps = encoded
+            return self.classifier(features).squeeze(-1), attention_maps
+        return self.classifier(encoded).squeeze(-1)
 
 
 def _builder(dimensions, config):

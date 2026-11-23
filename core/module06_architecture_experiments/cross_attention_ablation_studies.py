@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gc
 import re
 import time
 from pathlib import Path
@@ -28,12 +29,14 @@ from core.module06_architecture_experiments.cross_attention_3modal_experiment im
 )
 from core.module06_architecture_experiments.fusion_classifier_benchmark import (
     _fit_fixed_tree,
+    _load_tree_model,
     _predict_proba,
     _save_tree_model,
     _tree_node_count,
     _compute_metrics,
 )
 from core.module06_architecture_experiments.token_topk_experiment import _VariantCenteredWindow
+from core.module06_architecture_experiments.window_token_cache import add_window_cache_to_loader
 from core.module06_architecture_experiments.transformer_3modal_experiment import (
     _ScalarFeatureTokenizer,
 )
@@ -46,6 +49,90 @@ GEOM_FEATURES = [
 ]
 PCA_COMPONENTS = 256
 CLASSIFIERS = ("XGBoost", "CatBoost", "LightGBM")
+PURE_ML_TOKEN_WINDOW_RADIUS = 16
+
+
+def _resource_snapshot(label):
+    """Report host RSS/available RAM and CUDA free memory when observable."""
+    parts = [f"[Resources] {label}"]
+    try:
+        import psutil
+        process = psutil.Process()
+        info = process.memory_info()
+        parts.append(f"process_RSS={info.rss / (1024 ** 3):.2f} GiB")
+        peak = getattr(info, "peak_wset", None)
+        if peak:
+            parts.append(f"process_peak={peak / (1024 ** 3):.2f} GiB")
+        parts.append(f"system_available={psutil.virtual_memory().available / (1024 ** 3):.2f} GiB")
+    except Exception:
+        pass
+    try:
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            parts.append(f"CUDA_free={free / (1024 ** 3):.2f}/{total / (1024 ** 3):.2f} GiB")
+    except Exception:
+        pass
+    print(" | ".join(parts))
+
+
+class _ResourceSampler:
+    """Sample process/system/GPU memory during a tree-model fit."""
+
+    def __init__(self, interval_seconds=0.25):
+        import threading
+        self._threading = threading
+        self._stop = threading.Event()
+        self._interval = float(interval_seconds)
+        self.peak_rss = 0
+        self.minimum_available = None
+        self.peak_gpu_used = None
+
+    def _sample_loop(self):
+        try:
+            import psutil
+            process = psutil.Process()
+        except Exception:
+            process = None
+        while not self._stop.is_set():
+            if process is not None:
+                try:
+                    self.peak_rss = max(self.peak_rss, process.memory_info().rss)
+                    available = psutil.virtual_memory().available
+                    self.minimum_available = (
+                        available if self.minimum_available is None
+                        else min(self.minimum_available, available)
+                    )
+                except Exception:
+                    pass
+            try:
+                if torch.cuda.is_available():
+                    free, total = torch.cuda.mem_get_info()
+                    used = total - free
+                    self.peak_gpu_used = max(self.peak_gpu_used or 0, used)
+            except Exception:
+                pass
+            self._stop.wait(self._interval)
+
+    def start(self):
+        self._thread = self._threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join()
+        stats = {
+            "Fit_Peak_RSS_GiB": round(self.peak_rss / (1024 ** 3), 3) if self.peak_rss else None,
+            "Fit_Min_Available_RAM_GiB": (
+                round(self.minimum_available / (1024 ** 3), 3)
+                if self.minimum_available is not None else None
+            ),
+            "Fit_Peak_GPU_Device_Used_GiB": (
+                round(self.peak_gpu_used / (1024 ** 3), 3)
+                if self.peak_gpu_used is not None else None
+            ),
+        }
+        return stats
 
 
 def _slug(value):
@@ -67,57 +154,118 @@ def _load_rows(path):
     return pd.read_csv(path).to_dict("records") if path.is_file() else []
 
 
-def _collect_feature_matrix(context, target, split_name, seed, *, is_train=False):
-    pipeline = context["pipeline"]
+def _collect_feature_matrix(context, target, split_name, seed, *,
+                            embedding_representation, is_train=False):
+    if embedding_representation != "window_radius16_ref_alt_concat_flatten":
+        raise ValueError(
+            "Pure ML feature collection requires the Cross-Attention-compatible "
+            "radius-16 ref/alt token-window representation."
+        )
+    # The tree models consume the same local token inputs as Cross-Attention,
+    # flattened in relative-position order. They do not use the pooled FM vectors.
+    loader_context = dict(context)
+    loader_context["token_only"] = True
     loader = _architecture_loader(
-        pipeline, context, target, split_name, "center", context["DNA_MODEL"],
-        context["PROTEIN_MODEL"], is_train, "train3", seed, "delta",
+        loader_context["pipeline"], loader_context, target, split_name, "center",
+        loader_context["DNA_MODEL"], loader_context["PROTEIN_MODEL"], is_train,
+        "train3", seed, "ref_alt_concat",
     )
-    dna, protein, bio, geometry, labels, ids = [], [], [], [], [], []
+    loader = add_window_cache_to_loader(
+        loader=loader,
+        token_index=loader_context["token_embedding_cache_index"],
+        split_name=split_name,
+        dna_model_name=loader_context["DNA_MODEL"]["name"],
+        protein_model_name=loader_context["PROTEIN_MODEL"]["name"],
+        is_train=is_train,
+        batch_size=loader_context.get("token_batch_size"),
+        radius=PURE_ML_TOKEN_WINDOW_RADIUS,
+    )
     dataset = loader.dataset
-    dna_dim = int(dataset.v_dna_tensor.shape[1]) if getattr(dataset, "has_dna", False) else 0
-    protein_dim = int(dataset.v_prot_tensor.shape[1]) if getattr(dataset, "has_prot", False) else 0
     bio_dim = int(dataset.bio_tensor.shape[1]) if getattr(dataset, "has_bio", False) else 0
     geom_dim = int(dataset.geom_tensor.shape[1]) if getattr(dataset, "has_geom", False) else 0
+    width = 2 * PURE_ML_TOKEN_WINDOW_RADIUS + 1
+    dna_hidden = int(dataset.token_hidden_sizes["dna"])
+    protein_hidden = int(dataset.token_hidden_sizes["protein"])
+    dna_dim = width * 2 * dna_hidden + width  # paired token features plus validity mask
+    protein_dim = width * 2 * protein_hidden + width
+    dims = {"dna": dna_dim, "protein": protein_dim, "bio": bio_dim, "geometry": geom_dim}
+    offsets = {}
+    cursor_dim = 0
+    for name, dim in dims.items():
+        offsets[name] = (cursor_dim, cursor_dim + dim)
+        cursor_dim += dim
+    matrix = np.empty((len(dataset), cursor_dim), dtype=np.float32)
+    labels = np.empty(len(dataset), dtype=np.int32)
+    ids = []
+    cursor = 0
     for batch in loader:
-        if batch.get("v_dna") is not None:
-            dna.append(batch["v_dna"].cpu().numpy())
-        if batch.get("v_prot") is not None:
-            protein.append(batch["v_prot"].cpu().numpy())
-        if batch.get("bio_features") is not None:
-            bio.append(batch["bio_features"].cpu().numpy())
-        if batch.get("geom_features") is not None:
-            geometry.append(batch["geom_features"].cpu().numpy())
-        labels.append(batch["label"].reshape(-1).cpu().numpy().astype(np.int32))
+        count = int(batch["label"].shape[0])
+        stop = cursor + count
+        for modality, hidden_size in (("dna", dna_hidden), ("protein", protein_hidden)):
+            tokens = batch[f"token_{modality}"].cpu().numpy()
+            mask = batch[f"token_{modality}_mask"].cpu().numpy().astype(bool, copy=False)
+            ref = tokens[:, 0] * mask[:, 0, :, None]
+            alt = tokens[:, 1] * mask[:, 1, :, None]
+            paired = np.concatenate((ref, alt), axis=-1).reshape(count, width * 2 * hidden_size)
+            start, end = offsets[modality]
+            raw_end = start + width * 2 * hidden_size
+            matrix[cursor:stop, start:raw_end] = paired
+            matrix[cursor:stop, raw_end:end] = np.logical_or(mask[:, 0], mask[:, 1]).astype(np.float32)
+        for name in ("bio", "geometry"):
+            start, end = offsets[name]
+            if end > start:
+                key = "bio_features" if name == "bio" else "geom_features"
+                matrix[cursor:stop, start:end] = batch[key].cpu().numpy()
+        labels[cursor:stop] = batch["label"].reshape(-1).cpu().numpy().astype(np.int32)
         ids.extend(str(value) for value in batch["variant_id"])
-    del loader
-    modality_parts = [np.concatenate(values, axis=0) for values in (dna, protein, bio, geometry) if values]
-    matrix = np.concatenate(modality_parts, axis=1).astype(np.float32, copy=False)
-    return matrix, np.concatenate(labels), ids, {
-        "dna": dna_dim, "protein": protein_dim, "bio": bio_dim, "geometry": geom_dim,
+        cursor = stop
+    if cursor != len(dataset):
+        raise RuntimeError(f"Feature collection row count mismatch: {cursor} != {len(dataset)}")
+    block_bytes = {
+        name: (end - start) * len(dataset) * matrix.dtype.itemsize
+        for name, (start, end) in offsets.items()
     }
+    window_bytes = sum(
+        tensor.numel() * tensor.element_size()
+        for mapping_name in ("windows", "window_masks")
+        for tensor in getattr(dataset, mapping_name, {}).values()
+    )
+    print(
+        f"[Pure ML RAM] {split_name}: samples={len(dataset):,}, "
+        f"features={matrix.shape[1]:,}; matrix={matrix.nbytes / (1024 ** 3):.2f} GiB "
+        f"(DNA={block_bytes['dna'] / (1024 ** 3):.2f}, "
+        f"protein={block_bytes['protein'] / (1024 ** 3):.2f}, "
+        f"bio={block_bytes['bio'] / (1024 ** 3):.3f}, "
+        f"geometry={block_bytes['geometry'] / (1024 ** 3):.3f}); "
+        f"active token-window tensors={window_bytes / (1024 ** 3):.2f} GiB"
+    )
+    _resource_snapshot(f"after assembling {split_name}")
+    del loader
+    return matrix, labels, ids, dims
 
 
-def _apply_pca(train, other, dims, components, seed):
+def _apply_pca(train, other, dims, components, seed, n_threads=16):
     dna_dim, protein_dim = dims["dna"], dims["protein"]
     if not dna_dim or not protein_dim:
         raise ValueError("Pure ML PCA requires both DNA and protein embeddings.")
-    pca_dna = PCA(
-        n_components=min(int(components), len(train), dna_dim),
-        svd_solver="randomized", random_state=int(seed),
-    ).fit(train[:, :dna_dim])
-    pca_protein = PCA(
-        n_components=min(int(components), len(train), protein_dim),
-        svd_solver="randomized", random_state=int(seed),
-    ).fit(train[:, dna_dim:dna_dim + protein_dim])
+    from threadpoolctl import threadpool_limits
+    with threadpool_limits(limits=max(1, int(n_threads))):
+        pca_dna = PCA(
+            n_components=min(int(components), len(train), dna_dim),
+            svd_solver="randomized", random_state=int(seed),
+        ).fit(train[:, :dna_dim])
+        pca_protein = PCA(
+            n_components=min(int(components), len(train), protein_dim),
+            svd_solver="randomized", random_state=int(seed),
+        ).fit(train[:, dna_dim:dna_dim + protein_dim])
 
-    def transform(matrix):
-        dna = pca_dna.transform(matrix[:, :dna_dim])
-        protein = pca_protein.transform(matrix[:, dna_dim:dna_dim + protein_dim])
-        tabular = matrix[:, dna_dim + protein_dim:]
-        return np.concatenate((dna, protein, tabular), axis=1).astype(np.float32, copy=False)
+        def transform(matrix):
+            dna = pca_dna.transform(matrix[:, :dna_dim])
+            protein = pca_protein.transform(matrix[:, dna_dim:dna_dim + protein_dim])
+            tabular = matrix[:, dna_dim + protein_dim:]
+            return np.concatenate((dna, protein, tabular), axis=1).astype(np.float32, copy=False)
 
-    return transform(train), [transform(matrix) for matrix in other], pca_dna, pca_protein
+        return transform(train), [transform(matrix) for matrix in other], pca_dna, pca_protein
 
 
 def _save_validation(path, row):
@@ -151,9 +299,9 @@ def _pure_ml_seed_complete(output_root, seed, datasets):
 
 def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                           output_root, pca_components=PCA_COMPONENTS, pca_modes=None,
-                          display_fn=print):
-    """Evaluate the three fixed ML classifiers with separate DNA/protein PCA and without PCA."""
-    pca_modes = pca_modes or {"NoPCA": False, "PCA": True}
+                          execution_config=None, display_fn=print):
+    """Evaluate tree models on flattened Cross-Attention-compatible token windows."""
+    pca_modes = pca_modes or {"PCA": True, "NoPCA": False}
     if isinstance(pca_modes, dict):
         pca_modes = list(pca_modes.items())
     pca_modes = [(str(name), bool(enabled)) for name, enabled in pca_modes]
@@ -164,48 +312,119 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
         )
     if dict(pca_modes) != {"NoPCA": False, "PCA": True}:
         raise ValueError("NoPCA must disable PCA and PCA must enable it.")
-    output_root = Path(output_root) / "pure_ml_pca"
+    # Enforce the requested order even if a caller constructs the mapping in a
+    # different order: complete the PCA stage before starting any NoPCA fit.
+    pca_modes = sorted(pca_modes, key=lambda item: 0 if item[0] == "PCA" else 1)
+    execution_config = dict(execution_config or {
+        "prefer_gpu": False, "fallback_to_cpu": True, "cpu_threads": 16,
+        "gpu_ram_part": 0.8,
+    })
+    default_cpu_threads = max(1, int(execution_config.get("cpu_threads", 16)))
+    output_root = Path(output_root) / "pure_ml_ref_alt_concat_window33_gpu_first_pca16_nopca8"
     output_root.mkdir(parents=True, exist_ok=True)
     signature = {
-        "study": "pure_ml_pca_vs_no_pca",
+        "study": "pure_ml_ref_alt_concat_window33_pca_vs_no_pca",
         "target": target,
         "seeds": list(map(int, seeds)),
         "classifiers": list(CLASSIFIERS),
         "pca_modes": dict(pca_modes),
         "classifier_parameters": classifier_parameters,
+        "execution_config": execution_config,
         "pca_components": int(pca_components),
-        "pca_fit_scope": "train3_only; separate DNA and protein; preserve tabular features",
-        "input_representation": "center-pooled E_alt_minus_E_ref + selected biological/geometry features",
+        "pca_fit_scope": "train3_only; separately fit DNA-window and protein-window blocks; preserve tabular features",
+        "input_representation": (
+            "radius-16 token window; concat(E_ref_token, E_alt_token) at each relative position; "
+            "flatten positions in order; append bio/SpliceAI/geometry"
+        ),
+        "token_window_radius": PURE_ML_TOKEN_WINDOW_RADIUS,
     }
-    ensure_stage_signature(output_root, "pure_ml_pca_ablation", signature)
+    ensure_stage_signature(output_root, "pure_ml_ref_alt_concat_window33_ablation", signature)
     summary_path = output_root / "test_metrics_by_seed.csv"
     summary_rows = _load_rows(summary_path)
-    for seed in map(int, seeds):
-        if _pure_ml_seed_complete(output_root, seed, context["datasets"]):
-            print(f"[RESUME] Pure ML seed {seed}: all six classifier/PCA runs complete; skipping feature loading.")
-            for classifier in CLASSIFIERS:
-                for label, _use_pca in pca_modes:
-                    run_test_rows = _load_rows(
-                        output_root / classifier / label / f"seed_{seed}" / "test_metrics.csv"
-                    )
-                    for row in run_test_rows:
-                        summary_rows = upsert_record(
-                            summary_rows, row,
-                            ["Classifier", "PCA", "Seed", "Dataset"],
+    # Mirror the fast in-memory workflow used by the earlier notebooks: hydrate
+    # each feature split once, keep the matrices resident, and reuse them for
+    # all classifiers, PCA modes, and seeds in this study.
+    feature_cache = None
+    for label, use_pca in pca_modes:
+        cpu_threads = max(1, int(execution_config.get(
+            "cpu_threads_pca" if use_pca else "cpu_threads_no_pca",
+            default_cpu_threads,
+        )))
+        for seed in map(int, seeds):
+            if _pure_ml_seed_complete(output_root, seed, context["datasets"]):
+                print(f"[RESUME] Pure ML seed {seed}: all six classifier/PCA runs complete; skipping feature loading.")
+                for classifier in CLASSIFIERS:
+                    for summary_label, _use_pca in pca_modes:
+                        run_test_rows = _load_rows(
+                            output_root / classifier / summary_label / f"seed_{seed}" / "test_metrics.csv"
                         )
-            save_progress_csv(summary_rows, summary_path)
-            continue
-        print(f"[Pure ML] Loading fixed train/validation/test features for seed {seed}...")
-        train, y_train, _, dims = _collect_feature_matrix(context, target, "train3", seed, is_train=True)
-        validation, y_val, _, _ = _collect_feature_matrix(context, target, "val", seed)
-        tests = {}
-        for split in context["datasets"]:
-            tests[split["name"]] = _collect_feature_matrix(context, target, split["test"], seed)
+                        for row in run_test_rows:
+                            summary_rows = upsert_record(
+                                summary_rows, row,
+                                ["Classifier", "PCA", "Seed", "Dataset"],
+                            )
+                save_progress_csv(summary_rows, summary_path)
+                continue
+            if feature_cache is None:
+                _resource_snapshot("before Pure ML feature preload")
+                print(
+                    f"[Pure ML] Preloading radius-{PURE_ML_TOKEN_WINDOW_RADIUS} "
+                    "train/validation feature matrices into RAM..."
+                )
+                train, y_train, _, dims = _collect_feature_matrix(
+                    context, target, "train3", seed, is_train=True,
+                    embedding_representation="window_radius16_ref_alt_concat_flatten",
+                )
+                validation, y_val, _, _ = _collect_feature_matrix(
+                    context, target, "val", seed,
+                    embedding_representation="window_radius16_ref_alt_concat_flatten",
+                )
+                feature_cache = {
+                    "train": train, "y_train": y_train,
+                    "validation": validation, "y_val": y_val,
+                    "dims": dims,
+                }
+                total_bytes = train.nbytes + validation.nbytes
+                print(
+                    f"[Pure ML] Train/validation feature matrices resident in RAM: "
+                    f"{total_bytes / (1024 ** 3):.2f} GiB (float32); reused across "
+                    "all classifiers, PCA modes, and seeds. Test splits are loaded "
+                    "one at a time after each model group is fitted."
+                )
+                _resource_snapshot("after Pure ML feature preload")
+            else:
+                print(f"[Pure ML] Reusing preloaded feature matrices from RAM for seed {seed}.")
 
-        for classifier in CLASSIFIERS:
-            source = classifier_parameters[classifier]
-            base_params = dict(source["params"])
-            for label, use_pca in pca_modes:
+            train = feature_cache["train"]
+            y_train = feature_cache["y_train"]
+            validation = feature_cache["validation"]
+            y_val = feature_cache["y_val"]
+            dims = feature_cache["dims"]
+            pca_cache = None
+            if use_pca:
+                print(f"[Pure ML] Fitting PCA for seed {seed} before classifier training...")
+                _resource_snapshot(f"before PCA fit for seed {seed}")
+                pca_monitor = _ResourceSampler().start()
+                try:
+                    x_train_pca, transformed, pca_dna, pca_protein = _apply_pca(
+                        train, [validation], dims, pca_components, seed,
+                        n_threads=cpu_threads,
+                    )
+                finally:
+                    pca_memory = pca_monitor.stop()
+                print(f"[Pure ML PCA] seed_{seed}: peak_memory={pca_memory}")
+                _resource_snapshot(f"after PCA fit for seed {seed}")
+                pca_cache = {
+                    "train": x_train_pca,
+                    "validation": transformed[0],
+                    "dna": pca_dna,
+                    "protein": pca_protein,
+                    "memory": pca_memory,
+                }
+            run_state = []
+            for classifier in CLASSIFIERS:
+                source = classifier_parameters[classifier]
+                base_params = dict(source["params"])
                 run_dir = output_root / classifier / label / f"seed_{seed}"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 model_path = run_dir / "best_model"
@@ -221,7 +440,9 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                 ensure_stage_signature(run_dir, f"pure_ml_{classifier}_{label}_seed_{seed}", {
                     "target": target, "seed": seed, "classifier": classifier,
                     "parameters": base_params, "pca": use_pca,
-                    "pca_components": int(pca_components), "input": "delta + tabular",
+                    "execution_config": execution_config,
+                    "pca_components": int(pca_components),
+                    "input": "radius16 token-level ref_alt_concat flattened by relative position + tabular",
                 })
                 saved_validation = _load_rows(val_path)
                 val_record = next((row for row in saved_validation
@@ -230,13 +451,15 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                 prediction_rows = _load_rows(predictions_path)
                 expected_datasets = [str(item["name"]) for item in context["datasets"]]
                 complete_tests = all(any(
-                    str(row.get("Dataset")) == name and pd.notna(row.get("MCC"))
+                    str(row.get("Dataset")) == name
+                    and int(float(row.get("Seed", -1))) == seed
+                    and pd.notna(row.get("MCC"))
                     for row in saved_test
                 ) and any(
                     str(row.get("Dataset")) == name
+                    and int(float(row.get("Seed", -1))) == seed
                     for row in prediction_rows
                 ) for name in expected_datasets)
-
                 if val_record is not None and model_path.is_file() and complete_tests:
                     print(f"[RESUME] PureML {classifier}/{label}/seed_{seed}: complete; skipping fit and test.")
                     for row in saved_test:
@@ -248,27 +471,37 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                     continue
 
                 x_train, x_val = train, validation
-                x_tests = {name: bundle[0] for name, bundle in tests.items()}
-                pca_dna = pca_protein = None
                 if use_pca:
-                    x_train, transformed, pca_dna, pca_protein = _apply_pca(
-                        train, [validation, *x_tests.values()], dims, pca_components, seed
-                    )
-                    x_val = transformed[0]
-                    x_tests = dict(zip(x_tests, transformed[1:]))
-                    joblib.dump(pca_dna, run_dir / "pca_dna.joblib")
-                    joblib.dump(pca_protein, run_dir / "pca_protein.joblib")
+                    pca_dna_path = run_dir / "pca_dna.joblib"
+                    pca_protein_path = run_dir / "pca_protein.joblib"
+                    x_train = pca_cache["train"]
+                    x_val = pca_cache["validation"]
+                    joblib.dump(pca_cache["dna"], pca_dna_path)
+                    joblib.dump(pca_cache["protein"], pca_protein_path)
 
                 if val_record is not None and model_path.is_file():
-                    from core.module06_architecture_experiments.fusion_classifier_benchmark import _load_tree_model
-                    model = _load_tree_model(classifier, model_path)
                     threshold = float(val_record["Decision_Threshold"])
                     fit_seconds = float(val_record.get("Fit_Seconds", 0.0))
                 else:
                     params = dict(base_params)
+                    _resource_snapshot(f"before {classifier}/{label}/seed_{seed} fit")
                     started = time.perf_counter()
-                    model = _fit_fixed_tree(classifier, params, seed, x_train, y_train, x_val, y_val)
+                    resource_monitor = _ResourceSampler().start()
+                    try:
+                        model, execution_device = _fit_fixed_tree(
+                            classifier, params, seed, x_train, y_train, x_val, y_val,
+                            execution_config=execution_config,
+                            return_execution_device=True,
+                        )
+                    finally:
+                        fit_memory = resource_monitor.stop()
                     fit_seconds = time.perf_counter() - started
+                    print(
+                        f"[Pure ML fit] {classifier}/{label}/seed_{seed}: "
+                        f"device={execution_device}, CPU_threads={cpu_threads}, "
+                        f"fit_time={fit_seconds:.1f}s, peak_memory={fit_memory}"
+                    )
+                    _resource_snapshot(f"after {classifier}/{label}/seed_{seed} fit")
                     probabilities = _predict_proba(classifier, model, x_val)
                     threshold, val_mcc = context["pipeline"]._select_validation_threshold(y_val, probabilities)
                     val_metrics = _compute_metrics(context["pipeline"], y_val, probabilities, threshold)
@@ -276,9 +509,18 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                     val_record = {
                         "Branch": "Pure_ML", "Target_Config": target["name"],
                         "Classifier": classifier, "PCA": use_pca, "PCA_Mode": label, "Seed": seed,
-                        "Input_Representation": "delta", "PCA_Components": int(pca_components) if use_pca else 0,
+                        "Input_Representation": "window_radius16_ref_alt_concat_flatten",
+                        "Token_Window_Radius": PURE_ML_TOKEN_WINDOW_RADIUS,
+                        "PCA_Components": int(pca_components) if use_pca else 0,
                         "Decision_Threshold": float(threshold), "Val_MCC": float(val_mcc),
                         "Fit_Seconds": round(fit_seconds, 3),
+                        "Execution_Device": execution_device,
+                        "CPU_Threads": cpu_threads,
+                        **fit_memory,
+                        **({
+                            f"PCA_{key}": value
+                            for key, value in pca_cache["memory"].items()
+                        } if use_pca else {}),
                         "Legacy_Parameter_Source": source.get("source_csv"),
                         "Legacy_Parameter_Trial": source.get("source_trial"),
                         "Legacy_Parameter_Val_MCC": source.get("source_val_mcc"),
@@ -286,52 +528,154 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                         **{f"Val_{name}": value for name, value in val_metrics.items()},
                     }
                     _save_validation(val_path, val_record)
+                if val_record is not None and model_path.is_file():
+                    execution_device = str(val_record.get("Execution_Device", "CPU"))
+                    if "CPU_Threads" not in val_record:
+                        val_record["CPU_Threads"] = cpu_threads
+                        _save_validation(val_path, val_record)
+                run_state.append({
+                    "classifier": classifier,
+                    "label": label,
+                    "use_pca": use_pca,
+                    "run_dir": run_dir,
+                    "model_path": model_path,
+                    "test_path": test_path,
+                    "predictions_path": predictions_path,
+                    "saved_test": saved_test,
+                    "prediction_rows": prediction_rows,
+                    "base_params": base_params,
+                    "val_record": val_record,
+                    "threshold": threshold,
+                    "fit_seconds": fit_seconds,
+                    "execution_device": execution_device,
+                })
+                if "model" in locals():
+                    del model
+                if "probabilities" in locals():
+                    del probabilities
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-                for dataset in context["datasets"]:
-                    dataset_name = str(dataset["name"])
-                    if any(str(row.get("Dataset")) == dataset_name for row in saved_test) and any(
-                        str(row.get("Dataset")) == dataset_name for row in prediction_rows
-                    ):
-                        saved_row = next(row for row in saved_test if str(row.get("Dataset")) == dataset_name)
+            # Hold only train/validation while fitting. At evaluation time, load
+            # one test split, score every pending classifier, then release it.
+            for dataset in context["datasets"]:
+                dataset_name = str(dataset["name"])
+                pending = []
+                for state in run_state:
+                    metric_exists = any(
+                        str(row.get("Dataset")) == dataset_name
+                        and int(float(row.get("Seed", -1))) == seed
+                        and pd.notna(row.get("MCC"))
+                        for row in state["saved_test"]
+                    )
+                    prediction_exists = any(
+                        str(row.get("Dataset")) == dataset_name
+                        and int(float(row.get("Seed", -1))) == seed
+                        for row in state["prediction_rows"]
+                    )
+                    if metric_exists and prediction_exists:
+                        saved_row = next(
+                            row for row in state["saved_test"]
+                            if str(row.get("Dataset")) == dataset_name
+                            and int(float(row.get("Seed", -1))) == seed
+                        )
                         summary_rows = upsert_record(
                             summary_rows, saved_row,
                             ["Classifier", "PCA", "Seed", "Dataset"],
                         )
-                        save_progress_csv(summary_rows, summary_path)
-                        continue
-                    x_test = x_tests[dataset_name]
-                    y_test = tests[dataset_name][1]
-                    ids = tests[dataset_name][2]
+                    else:
+                        pending.append(state)
+
+                if not pending:
+                    save_progress_csv(summary_rows, summary_path)
+                    continue
+
+                print(f"[Pure ML] Loading one test split for scoring: {dataset_name}...")
+                test_matrix, y_test, ids, _ = _collect_feature_matrix(
+                    context, target, dataset["test"], seed,
+                    embedding_representation="window_radius16_ref_alt_concat_flatten",
+                )
+                for state in pending:
+                    classifier = state["classifier"]
+                    model = _load_tree_model(classifier, state["model_path"])
+                    if state["use_pca"]:
+                        dna_dim, protein_dim = dims["dna"], dims["protein"]
+                        dna = pca_cache["dna"].transform(test_matrix[:, :dna_dim])
+                        protein = pca_cache["protein"].transform(
+                            test_matrix[:, dna_dim:dna_dim + protein_dim]
+                        )
+                        tabular = test_matrix[:, dna_dim + protein_dim:]
+                        x_test = np.concatenate((dna, protein, tabular), axis=1).astype(
+                            np.float32, copy=False
+                        )
+                        del dna, protein, tabular
+                    else:
+                        x_test = test_matrix
+                    threshold = state["threshold"]
                     probabilities = _predict_proba(classifier, model, x_test)
                     metrics = _compute_metrics(context["pipeline"], y_test, probabilities, threshold)
                     row = {
                         "Run_ID": Path(context["pipeline"].batch_run_dir).name,
                         "Branch": "Pure_ML", "Target_Config": target["name"],
                         "Dataset": dataset_name, "Classifier": classifier,
-                        "PCA": use_pca, "PCA_Mode": label, "Seed": seed, "Input_Representation": "delta",
+                        "PCA": state["use_pca"], "PCA_Mode": state["label"], "Seed": seed,
+                        "Input_Representation": "window_radius16_ref_alt_concat_flatten",
+                        "Token_Window_Radius": PURE_ML_TOKEN_WINDOW_RADIUS,
                         "Decision_Threshold": threshold, "N_Test_Samples": len(y_test),
-                        "Fit_Seconds": round(fit_seconds, 3),
-                        "Hyperparameters": json.dumps(base_params, sort_keys=True, default=_json_safe),
+                        "Fit_Seconds": round(state["fit_seconds"], 3),
+                        "Execution_Device": state["execution_device"],
+                        "CPU_Threads": cpu_threads,
+                        **{
+                            key: state["val_record"].get(key)
+                            for key in (
+                                "Fit_Peak_RSS_GiB", "Fit_Min_Available_RAM_GiB",
+                                "Fit_Peak_GPU_Device_Used_GiB",
+                            )
+                        },
+                        **({
+                            f"PCA_{key}": value
+                            for key, value in pca_cache["memory"].items()
+                        } if state["use_pca"] else {}),
+                        "Hyperparameters": json.dumps(
+                            state["base_params"], sort_keys=True, default=_json_safe
+                        ),
                         **metrics,
                     }
-                    saved_test = upsert_record(saved_test, row, ["Seed", "Classifier", "PCA", "Dataset"])
-                    prediction_rows = [r for r in prediction_rows if not (
-                        str(r.get("Dataset")) == dataset_name and int(float(r.get("Seed", -1))) == seed
+                    saved_test = upsert_record(
+                        state["saved_test"], row,
+                        ["Seed", "Classifier", "PCA", "Dataset"],
+                    )
+                    prediction_rows = [r for r in state["prediction_rows"] if not (
+                        str(r.get("Dataset")) == dataset_name
+                        and int(float(r.get("Seed", -1))) == seed
                     )]
                     prediction_rows.extend({
-                        "Classifier": classifier, "PCA": use_pca, "PCA_Mode": label, "Seed": seed,
+                        "Classifier": classifier, "PCA": state["use_pca"],
+                        "PCA_Mode": state["label"], "Seed": seed,
                         "Dataset": dataset_name, "Variant_ID": str(variant_id),
-                        "Label": int(label), "Probability_Pathogenic": float(probability),
+                        "Label": int(label_value),
+                        "Probability_Pathogenic": float(probability),
                         "Prediction": int(probability >= threshold),
-                    } for variant_id, label, probability in zip(ids, y_test, probabilities))
-                    save_progress_csv(saved_test, test_path)
-                    save_progress_csv(prediction_rows, predictions_path)
+                    } for variant_id, label_value, probability in zip(ids, y_test, probabilities))
+                    save_progress_csv(saved_test, state["test_path"])
+                    save_progress_csv(prediction_rows, state["predictions_path"])
+                    state["saved_test"] = saved_test
+                    state["prediction_rows"] = prediction_rows
                     summary_rows = upsert_record(
-                        summary_rows, row, ["Classifier", "PCA", "Seed", "Dataset"]
+                        summary_rows, row,
+                        ["Classifier", "PCA", "Seed", "Dataset"],
                     )
                     save_progress_csv(summary_rows, summary_path)
-                    print(f"[Pure ML] {classifier}/{label}/seed_{seed}/{dataset_name}: MCC={metrics['MCC']:.4f}")
-
+                    print(
+                        f"[Pure ML] {classifier}/{state['label']}/seed_{seed}/{dataset_name}: "
+                        f"MCC={metrics['MCC']:.4f}"
+                    )
+                    del model, x_test, probabilities
+                del test_matrix, y_test, ids
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
     return pd.DataFrame(_load_rows(summary_path))
 
 
