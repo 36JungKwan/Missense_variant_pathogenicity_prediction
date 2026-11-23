@@ -3,12 +3,14 @@
     "classifier": "LightGBM",
     "execution_config": {
       "cpu_threads": 16,
-      "cpu_threads_no_pca": 8,
+      "cpu_threads_no_pca": 4,
       "cpu_threads_pca": 16,
       "fallback_to_cpu": true,
       "gpu_device_id": 0,
       "gpu_ram_part": 0.8,
-      "prefer_gpu": true
+      "no_pca_max_bin": 128,
+      "prefer_gpu": true,
+      "prefer_gpu_no_pca": false
     },
     "input": "radius16 token-level ref_alt_concat flattened by relative position + tabular",
     "parameters": {
@@ -75,7 +77,7 @@
       "name": "B_with_geometry"
     }
   },
-  "config_sha256": "047ef7a217ad307ea0e564f6e80f43a3ee48be4db6813646bacb089fbd49a73f",
+  "config_sha256": "d3c79075b0ddfe1d471038b768421cd1f7c0e57d2f46777204d5294e80d1b05f",
   "stage": "pure_ml_LightGBM_PCA_seed_5",
   "version": 1
 }

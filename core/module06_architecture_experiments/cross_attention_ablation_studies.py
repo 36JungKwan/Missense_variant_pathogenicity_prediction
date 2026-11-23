@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import gc
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -37,6 +38,9 @@ from core.module06_architecture_experiments.fusion_classifier_benchmark import (
 )
 from core.module06_architecture_experiments.token_topk_experiment import _VariantCenteredWindow
 from core.module06_architecture_experiments.window_token_cache import add_window_cache_to_loader
+from core.module06_architecture_experiments.token_embedding_cache import (
+    resolve_token_embedding_cache,
+)
 from core.module06_architecture_experiments.transformer_3modal_experiment import (
     _ScalarFeatureTokenizer,
 )
@@ -155,7 +159,8 @@ def _load_rows(path):
 
 
 def _collect_feature_matrix(context, target, split_name, seed, *,
-                            embedding_representation, is_train=False):
+                            embedding_representation, is_train=False,
+                            matrix_path=None):
     if embedding_representation != "window_radius16_ref_alt_concat_flatten":
         raise ValueError(
             "Pure ML feature collection requires the Cross-Attention-compatible "
@@ -194,7 +199,15 @@ def _collect_feature_matrix(context, target, split_name, seed, *,
     for name, dim in dims.items():
         offsets[name] = (cursor_dim, cursor_dim + dim)
         cursor_dim += dim
-    matrix = np.empty((len(dataset), cursor_dim), dtype=np.float32)
+    if matrix_path is None:
+        matrix = np.empty((len(dataset), cursor_dim), dtype=np.float32)
+    else:
+        matrix_path = Path(matrix_path)
+        matrix_path.parent.mkdir(parents=True, exist_ok=True)
+        matrix = np.lib.format.open_memmap(
+            matrix_path, mode="w+", dtype=np.float32,
+            shape=(len(dataset), cursor_dim),
+        )
     labels = np.empty(len(dataset), dtype=np.int32)
     ids = []
     cursor = 0
@@ -240,8 +253,114 @@ def _collect_feature_matrix(context, target, split_name, seed, *,
         f"active token-window tensors={window_bytes / (1024 ** 3):.2f} GiB"
     )
     _resource_snapshot(f"after assembling {split_name}")
+    if isinstance(matrix, np.memmap):
+        matrix.flush()
     del loader
     return matrix, labels, ids, dims
+
+
+def _feature_matrix_cache_signature(context, target, split_name):
+    """Fingerprint the batch-local token inputs used to build a feature mmap."""
+    token_index = context["token_embedding_cache_index"]
+    source_caches = {}
+    for modality, model_key in (("dna", "DNA_MODEL"), ("protein", "PROTEIN_MODEL")):
+        model_name = str(context[model_key]["name"])
+        folder = resolve_token_embedding_cache(token_index, model_name, split_name)
+        manifest_path = folder / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        shards = []
+        for shard_path in sorted(folder.glob("shard_*.pt")):
+            stat = shard_path.stat()
+            shards.append((shard_path.name, stat.st_size, stat.st_mtime_ns))
+        source_path = Path(manifest["input_path"])
+        source_stat = source_path.stat()
+        source_caches[modality] = {
+            "model_name": model_name,
+            "manifest": manifest,
+            "manifest_stat": (manifest_path.stat().st_size, manifest_path.stat().st_mtime_ns),
+            "source_stat": (source_stat.st_size, source_stat.st_mtime_ns),
+            "shards": shards,
+        }
+    signature = {
+        "version": 1,
+        "batch_run_dir": str(context["pipeline"].batch_run_dir),
+        "target": target,
+        "split": str(split_name),
+        "token_window_radius": PURE_ML_TOKEN_WINDOW_RADIUS,
+        "representation": "radius16_ref_alt_concat_flatten_plus_bio_geometry_float32",
+        "source_caches": source_caches,
+    }
+    encoded = json.dumps(signature, sort_keys=True, default=_json_safe).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_or_create_feature_memmap(context, target, split_name, seed, cache_dir):
+    """Build once to a disk-backed .npy array, then reuse it without RAM copies."""
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    matrix_path = cache_dir / f"{_slug(split_name)}_features.npy"
+    labels_path = cache_dir / f"{_slug(split_name)}_labels.npy"
+    metadata_path = cache_dir / f"{_slug(split_name)}_manifest.json"
+    signature = _feature_matrix_cache_signature(context, target, split_name)
+    metadata = None
+    matrix = labels = None
+    cache_valid = False
+    if metadata_path.is_file() and matrix_path.is_file() and labels_path.is_file():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("signature") == signature:
+                matrix = np.load(matrix_path, mmap_mode="r")
+                labels = np.load(labels_path, mmap_mode="r")
+                if (
+                    list(matrix.shape) == metadata.get("shape")
+                    and matrix.dtype == np.float32
+                    and list(labels.shape) == [matrix.shape[0]]
+                ):
+                    cache_valid = True
+                    print(
+                        f"[Pure ML mmap] Reusing {split_name}: {matrix_path} "
+                        f"({matrix.nbytes / (1024 ** 3):.2f} GiB mapped, not eagerly copied)."
+                    )
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            metadata = None
+        finally:
+            if not cache_valid:
+                for mapped in (matrix, labels):
+                    if isinstance(mapped, np.memmap):
+                        mapped._mmap.close()
+                matrix = labels = None
+    if cache_valid:
+        return matrix, labels, metadata["dims"]
+
+    print(f"[Pure ML mmap] Creating disk-backed feature matrix for {split_name}...")
+    if metadata_path.exists():
+        metadata_path.unlink()
+    matrix, labels, _, dims = _collect_feature_matrix(
+        context, target, split_name, seed, is_train=(split_name == "train3"),
+        embedding_representation="window_radius16_ref_alt_concat_flatten",
+        matrix_path=matrix_path,
+    )
+    labels_tmp = labels_path.with_name(labels_path.stem + ".tmp.npy")
+    with labels_tmp.open("wb") as stream:
+        np.save(stream, labels, allow_pickle=False)
+    labels_tmp.replace(labels_path)
+    metadata = {
+        "signature": signature,
+        "shape": list(matrix.shape),
+        "dtype": str(matrix.dtype),
+        "dims": dims,
+    }
+    metadata_tmp = metadata_path.with_suffix(".tmp.json")
+    metadata_tmp.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    metadata_tmp.replace(metadata_path)
+    del matrix, labels
+    matrix = np.load(matrix_path, mmap_mode="r")
+    labels = np.load(labels_path, mmap_mode="r")
+    print(
+        f"[Pure ML mmap] Ready {split_name}: {matrix_path} "
+        f"({matrix.nbytes / (1024 ** 3):.2f} GiB mapped; feature pages are OS-reclaimable)."
+    )
+    return matrix, labels, dims
 
 
 def _apply_pca(train, other, dims, components, seed, n_threads=16):
@@ -278,23 +397,50 @@ def _save_validation(path, row):
 def _pure_ml_seed_complete(output_root, seed, datasets):
     for classifier in CLASSIFIERS:
         for label in ("NoPCA", "PCA"):
-            run_dir = Path(output_root) / classifier / label / f"seed_{seed}"
-            model_path = run_dir / "best_model"
-            model_path = model_path.with_suffix(
-                ".json" if classifier == "XGBoost" else ".txt" if classifier == "LightGBM" else ".cbm"
-            )
-            val_rows = _load_rows(run_dir / "validation_metrics.csv")
-            test_rows = _load_rows(run_dir / "test_metrics.csv")
-            prediction_rows = _load_rows(run_dir / "test_predictions.csv")
-            if not model_path.is_file() or not val_rows:
+            if not _pure_ml_mode_seed_complete(output_root, seed, datasets, label):
                 return False
-            for dataset in datasets:
-                name = str(dataset["name"])
-                metric = next((row for row in test_rows if str(row.get("Dataset")) == name), None)
-                n_predictions = sum(1 for row in prediction_rows if str(row.get("Dataset")) == name)
-                if metric is None or pd.isna(metric.get("MCC")) or n_predictions < int(float(metric.get("N_Test_Samples", 0))):
-                    return False
     return True
+
+
+def _pure_ml_mode_seed_complete(output_root, seed, datasets, label):
+    """Check one PCA mode independently so a completed stage is not rebuilt."""
+    for classifier in CLASSIFIERS:
+        run_dir = Path(output_root) / classifier / label / f"seed_{seed}"
+        model_path = run_dir / "best_model"
+        model_path = model_path.with_suffix(
+            ".json" if classifier == "XGBoost" else ".txt" if classifier == "LightGBM" else ".cbm"
+        )
+        val_rows = _load_rows(run_dir / "validation_metrics.csv")
+        test_rows = _load_rows(run_dir / "test_metrics.csv")
+        prediction_rows = _load_rows(run_dir / "test_predictions.csv")
+        if not model_path.is_file() or not val_rows:
+            return False
+        for dataset in datasets:
+            name = str(dataset["name"])
+            metric = next((row for row in test_rows if str(row.get("Dataset")) == name), None)
+            n_predictions = sum(1 for row in prediction_rows if str(row.get("Dataset")) == name)
+            if (
+                metric is None or pd.isna(metric.get("MCC"))
+                or n_predictions < int(float(metric.get("N_Test_Samples", 0)))
+            ):
+                return False
+    return True
+
+
+def _pure_ml_fit_config(classifier, params, execution_config, use_pca):
+    config = dict(execution_config)
+    thread_key = "cpu_threads_pca" if use_pca else "cpu_threads_no_pca"
+    config["cpu_threads"] = max(1, int(config.get(thread_key, config.get("cpu_threads", 16))))
+    if not use_pca and "prefer_gpu_no_pca" in config:
+        config["prefer_gpu"] = bool(config["prefer_gpu_no_pca"])
+    effective_params = dict(params)
+    if not use_pca and "no_pca_max_bin" in config:
+        max_bin = int(config["no_pca_max_bin"])
+        if max_bin < 2:
+            raise ValueError("no_pca_max_bin must be at least 2.")
+        bin_key = "border_count" if classifier == "CatBoost" else "max_bin"
+        effective_params[bin_key] = min(int(effective_params.get(bin_key, max_bin)), max_bin)
+    return effective_params, config
 
 
 def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
@@ -365,20 +511,40 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                             )
                 save_progress_csv(summary_rows, summary_path)
                 continue
+            if _pure_ml_mode_seed_complete(output_root, seed, context["datasets"], label):
+                print(
+                    f"[RESUME] Pure ML {label}/seed_{seed}: all three classifiers and "
+                    "four test splits are complete; skipping this mode without rebuilding features."
+                )
+                for classifier in CLASSIFIERS:
+                    run_test_rows = _load_rows(
+                        output_root / classifier / label / f"seed_{seed}" / "test_metrics.csv"
+                    )
+                    for row in run_test_rows:
+                        summary_rows = upsert_record(
+                            summary_rows, row,
+                            ["Classifier", "PCA", "Seed", "Dataset"],
+                        )
+                save_progress_csv(summary_rows, summary_path)
+                continue
             if feature_cache is None:
                 _resource_snapshot("before Pure ML feature preload")
                 print(
                     f"[Pure ML] Preloading radius-{PURE_ML_TOKEN_WINDOW_RADIUS} "
-                    "train/validation feature matrices into RAM..."
+                    "train/validation feature matrices into disk-backed mmap files..."
                 )
-                train, y_train, _, dims = _collect_feature_matrix(
-                    context, target, "train3", seed, is_train=True,
-                    embedding_representation="window_radius16_ref_alt_concat_flatten",
+                matrix_cache_dir = output_root / "feature_matrix_cache"
+                train, y_train, dims = _load_or_create_feature_memmap(
+                    context, target, "train3", seed, matrix_cache_dir
                 )
-                validation, y_val, _, _ = _collect_feature_matrix(
-                    context, target, "val", seed,
-                    embedding_representation="window_radius16_ref_alt_concat_flatten",
+                validation, y_val, validation_dims = _load_or_create_feature_memmap(
+                    context, target, "val", seed, matrix_cache_dir
                 )
+                if validation_dims != dims:
+                    raise RuntimeError(
+                        f"Feature dimensions differ between train and validation: "
+                        f"{dims} vs {validation_dims}"
+                    )
                 feature_cache = {
                     "train": train, "y_train": y_train,
                     "validation": validation, "y_val": y_val,
@@ -386,9 +552,10 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                 }
                 total_bytes = train.nbytes + validation.nbytes
                 print(
-                    f"[Pure ML] Train/validation feature matrices resident in RAM: "
-                    f"{total_bytes / (1024 ** 3):.2f} GiB (float32); reused across "
-                    "all classifiers, PCA modes, and seeds. Test splits are loaded "
+                    f"[Pure ML] Train/validation matrices mapped from disk: "
+                    f"{total_bytes / (1024 ** 3):.2f} GiB logical float32 size; "
+                    "reused across classifiers, modes, and seeds. OS page cache can "
+                    "evict mapped pages under memory pressure. Test splits are loaded "
                     "one at a time after each model group is fitted."
                 )
                 _resource_snapshot("after Pure ML feature preload")
@@ -424,7 +591,9 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
             run_state = []
             for classifier in CLASSIFIERS:
                 source = classifier_parameters[classifier]
-                base_params = dict(source["params"])
+                base_params, fit_execution_config = _pure_ml_fit_config(
+                    classifier, source["params"], execution_config, use_pca
+                )
                 run_dir = output_root / classifier / label / f"seed_{seed}"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 model_path = run_dir / "best_model"
@@ -490,7 +659,7 @@ def run_pure_ml_pca_study(*, context, target, seeds, classifier_parameters,
                     try:
                         model, execution_device = _fit_fixed_tree(
                             classifier, params, seed, x_train, y_train, x_val, y_val,
-                            execution_config=execution_config,
+                            execution_config=fit_execution_config,
                             return_execution_device=True,
                         )
                     finally:

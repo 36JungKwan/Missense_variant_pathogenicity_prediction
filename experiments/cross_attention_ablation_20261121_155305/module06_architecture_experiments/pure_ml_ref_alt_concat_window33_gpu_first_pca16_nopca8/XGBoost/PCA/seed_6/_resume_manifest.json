@@ -3,12 +3,14 @@
     "classifier": "XGBoost",
     "execution_config": {
       "cpu_threads": 16,
-      "cpu_threads_no_pca": 8,
+      "cpu_threads_no_pca": 4,
       "cpu_threads_pca": 16,
       "fallback_to_cpu": true,
       "gpu_device_id": 0,
       "gpu_ram_part": 0.8,
-      "prefer_gpu": true
+      "no_pca_max_bin": 128,
+      "prefer_gpu": true,
+      "prefer_gpu_no_pca": false
     },
     "input": "radius16 token-level ref_alt_concat flattened by relative position + tabular",
     "parameters": {
@@ -77,7 +79,7 @@
       "name": "B_with_geometry"
     }
   },
-  "config_sha256": "618cd2f3c00d66d3290b5c7ec215b556c90698f2d3736b935c638d5722f97660",
+  "config_sha256": "8bd3d6f2f6d0231b22713653cb1c80e8a041c3036a4ee8e1099b20e6c2f45b0d",
   "stage": "pure_ml_XGBoost_PCA_seed_6",
   "version": 1
 }

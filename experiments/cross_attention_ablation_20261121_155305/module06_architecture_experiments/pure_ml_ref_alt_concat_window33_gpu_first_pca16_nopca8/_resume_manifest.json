@@ -76,12 +76,14 @@
     ],
     "execution_config": {
       "cpu_threads": 16,
-      "cpu_threads_no_pca": 8,
+      "cpu_threads_no_pca": 4,
       "cpu_threads_pca": 16,
       "fallback_to_cpu": true,
       "gpu_device_id": 0,
       "gpu_ram_part": 0.8,
-      "prefer_gpu": true
+      "no_pca_max_bin": 128,
+      "prefer_gpu": true,
+      "prefer_gpu_no_pca": false
     },
     "input_representation": "radius-16 token window; concat(E_ref_token, E_alt_token) at each relative position; flatten positions in order; append bio/SpliceAI/geometry",
     "pca_components": 256,
@@ -145,7 +147,7 @@
     },
     "token_window_radius": 16
   },
-  "config_sha256": "1c82d3be79874cc79bdfbfbea0130d026c5b0cb6ea22ca4dc6fdb19f702d73d7",
+  "config_sha256": "e2daadec1a7a9b9b0f3c2b0e318e31f69c77914649862431eb3ae6965a91009c",
   "stage": "pure_ml_ref_alt_concat_window33_ablation",
   "version": 1
 }

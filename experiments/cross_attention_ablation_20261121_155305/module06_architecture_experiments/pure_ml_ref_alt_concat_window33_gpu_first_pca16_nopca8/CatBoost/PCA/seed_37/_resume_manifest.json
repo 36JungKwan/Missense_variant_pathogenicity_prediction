@@ -3,12 +3,14 @@
     "classifier": "CatBoost",
     "execution_config": {
       "cpu_threads": 16,
-      "cpu_threads_no_pca": 8,
+      "cpu_threads_no_pca": 4,
       "cpu_threads_pca": 16,
       "fallback_to_cpu": true,
       "gpu_device_id": 0,
       "gpu_ram_part": 0.8,
-      "prefer_gpu": true
+      "no_pca_max_bin": 128,
+      "prefer_gpu": true,
+      "prefer_gpu_no_pca": false
     },
     "input": "radius16 token-level ref_alt_concat flattened by relative position + tabular",
     "parameters": {
@@ -74,7 +76,7 @@
       "name": "B_with_geometry"
     }
   },
-  "config_sha256": "e82aac16168e25af8070eb7f12dc7255e51262b574c8624257de35f29c605ed8",
+  "config_sha256": "cdeffc0f9c08c016d5faf893eb5cd455f048a467ba3e424006f09a6b4ec6475c",
   "stage": "pure_ml_CatBoost_PCA_seed_37",
   "version": 1
 }

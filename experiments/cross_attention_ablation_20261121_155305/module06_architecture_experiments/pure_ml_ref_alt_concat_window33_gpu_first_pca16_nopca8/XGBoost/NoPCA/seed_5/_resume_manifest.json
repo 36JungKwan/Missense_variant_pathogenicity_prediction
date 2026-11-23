@@ -3,12 +3,14 @@
     "classifier": "XGBoost",
     "execution_config": {
       "cpu_threads": 16,
-      "cpu_threads_no_pca": 8,
+      "cpu_threads_no_pca": 4,
       "cpu_threads_pca": 16,
       "fallback_to_cpu": true,
       "gpu_device_id": 0,
       "gpu_ram_part": 0.8,
-      "prefer_gpu": true
+      "no_pca_max_bin": 128,
+      "prefer_gpu": true,
+      "prefer_gpu_no_pca": false
     },
     "input": "radius16 token-level ref_alt_concat flattened by relative position + tabular",
     "parameters": {
@@ -16,6 +18,7 @@
       "early_stopping_rounds": 150,
       "eval_metric": "logloss",
       "learning_rate": 0.0342316475539993,
+      "max_bin": 128,
       "max_depth": 10,
       "min_child_weight": 18.923444483491057,
       "n_estimators": 2000,
@@ -77,7 +80,7 @@
       "name": "B_with_geometry"
     }
   },
-  "config_sha256": "5801d13bdf1af2f3d2799d8548a548bb91e8e0ed04d8fdef427c956e8cad9307",
+  "config_sha256": "9ba1adff0cd7f4152ede4f1c6e72c1f6db97a8ac2ed9d929d23988f62ce6ce31",
   "stage": "pure_ml_XGBoost_NoPCA_seed_5",
   "version": 1
 }
