@@ -1,0 +1,37 @@
+# ---- Secrets & local config ----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# ---- Model weights & large artifacts (copy manually, see backend/artifacts) ----
+backend/artifacts/*.pth
+backend/artifacts/faiss_indexes/
+*.index
+*.safetensors
+
+# ---- Node / Vite ----
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# ---- IDE / OS ----
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ---- Runtime output ----
+logs/
+*.log
+predictions*.csv

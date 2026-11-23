@@ -1,0 +1,198 @@
+{
+  "single_variant": {
+    "variant_id": "chr7:140753336:A>T",
+    "gene": "BRAF",
+    "consequence": "p.Val600Glu (Missense)",
+    "clinvar_ground_truth": "Pathogenic",
+    "results": {
+      "rb_net": {
+        "probability": 0.94,
+        "label": "Pathogenic"
+      }
+    },
+    "sota": {
+      "alphamissense": 0.89,
+      "revel": 0.82
+    },
+    "shap_analysis": [
+      {
+        "feature": "LVD_Cosine",
+        "name": "Local Vector Distance (LVD)",
+        "contribution_value": 0.35,
+        "description": "High spatial divergence score in local functional pocket"
+      },
+      {
+        "feature": "SpliceAI_Delta",
+        "name": "SpliceAI Delta Score",
+        "contribution_value": 0.25,
+        "description": "Significant disruption of RNA transcript splice junctions"
+      },
+      {
+        "feature": "Spatial_Structural_Perturbation",
+        "name": "Spatial Structural Perturbation",
+        "contribution_value": 0.18,
+        "description": "Destabilization of tertiary spatial coordinates in the active site"
+      },
+      {
+        "feature": "PhyloP_Conservation",
+        "name": "PhyloP Conservation Score",
+        "contribution_value": 0.12,
+        "description": "High evolutionary conservation across 100 vertebrate genomes"
+      },
+      {
+        "feature": "Allele_Freq",
+        "name": "Allele Frequency (gnomAD)",
+        "contribution_value": -0.05,
+        "description": "Extremely low natural allele frequency in global population (<0.0001)"
+      }
+    ]
+  },
+  "presets": [
+    {
+      "id": "pathogenic",
+      "name": "BRAF V600E (Pathogenic)",
+      "variant_id": "chr7:140753336:A>T",
+      "gene": "BRAF",
+      "consequence": "p.Val600Glu (Missense)",
+      "clinvar_ground_truth": "Pathogenic",
+      "results": {
+        "rb_net": { "probability": 0.94, "label": "Pathogenic" }
+      },
+      "sota": { "alphamissense": 0.89, "revel": 0.82 },
+      "shap_analysis": [
+        { "feature": "LVD_Cosine", "name": "Local Vector Distance (LVD)", "contribution_value": 0.35, "description": "High spatial vector divergence in kinase active domain" },
+        { "feature": "SpliceAI_Delta", "name": "SpliceAI Delta Score", "contribution_value": 0.25, "description": "Exon-intron junction distortion predicted" },
+        { "feature": "Spatial_Structural_Perturbation", "name": "Spatial Structural Perturbation", "contribution_value": 0.18, "description": "Severe spatial coordinate perturbation of catalytic core" },
+        { "feature": "PhyloP_Conservation", "name": "PhyloP Conservation", "contribution_value": 0.12, "description": "Residue strongly conserved across 100 mammalian species" },
+        { "feature": "Allele_Freq", "name": "Allele Frequency", "contribution_value": -0.05, "description": "Ultra-rare somatic driver mutation in population databases" }
+      ]
+    },
+    {
+      "id": "brca1",
+      "name": "BRCA1 p.Arg1699Gln (Pathogenic)",
+      "variant_id": "chr17:41245466:G>A",
+      "gene": "BRCA1",
+      "consequence": "p.Arg1699Gln (Missense)",
+      "clinvar_ground_truth": "Pathogenic",
+      "results": {
+        "rb_net": { "probability": 0.88, "label": "Pathogenic" }
+      },
+      "sota": { "alphamissense": 0.84, "revel": 0.76 },
+      "shap_analysis": [
+        { "feature": "LVD_Cosine", "name": "Local Vector Distance (LVD)", "contribution_value": 0.28, "description": "Significant spatial dislocation in BRCT phosphopeptide binding pocket" },
+        { "feature": "Spatial_Structural_Perturbation", "name": "Spatial Structural Perturbation", "contribution_value": 0.22, "description": "Destabilization of the hydrophobic core packing" },
+        { "feature": "PhyloP_Conservation", "name": "PhyloP Conservation", "contribution_value": 0.14, "description": "Critical evolutionary conserved arginine residue" },
+        { "feature": "SpliceAI_Delta", "name": "SpliceAI Delta Score", "contribution_value": -0.04, "description": "Minimal impact on primary RNA splice sites" },
+        { "feature": "Allele_Freq", "name": "Allele Frequency", "contribution_value": -0.08, "description": "Rare allele reported in hereditary breast cancer cohorts" }
+      ]
+    },
+    {
+      "id": "benign",
+      "name": "BRCA2 p.Asn372His (Benign)",
+      "variant_id": "chr13:32906729:A>C",
+      "gene": "BRCA2",
+      "consequence": "p.Asn372His (Polymorphism)",
+      "clinvar_ground_truth": "Benign",
+      "results": {
+        "rb_net": { "probability": 0.08, "label": "Benign" }
+      },
+      "sota": { "alphamissense": 0.12, "revel": 0.14 },
+      "shap_analysis": [
+        { "feature": "Allele_Freq", "name": "Allele Frequency", "contribution_value": -0.38, "description": "Common polymorphism with high natural allele frequency (AF > 0.25)" },
+        { "feature": "SpliceAI_Delta", "name": "SpliceAI Delta Score", "contribution_value": -0.22, "description": "Normal transcript splicing preserved without aberrant donor/acceptor" },
+        { "feature": "Spatial_Structural_Perturbation", "name": "Spatial Structural Perturbation", "contribution_value": -0.15, "description": "No significant perturbation to folding geometry or binding interfaces" },
+        { "feature": "LVD_Cosine", "name": "Local Vector Distance (LVD)", "contribution_value": 0.03, "description": "Minimal spatial displacement near flexible disordered loop" }
+      ]
+    }
+  ],
+  "batch_variants": [
+    {
+      "id": 1,
+      "variant_id": "chr7:140753336:A>T",
+      "gene": "BRAF",
+      "consequence": "p.Val600Glu",
+      "rb_net_probability": 0.96,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.94,
+      "danger_rank": 1
+    },
+    {
+      "id": 2,
+      "variant_id": "chr17:7674220:C>T",
+      "gene": "TP53",
+      "consequence": "p.Arg273His",
+      "rb_net_probability": 0.95,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.93,
+      "danger_rank": 2
+    },
+    {
+      "id": 3,
+      "variant_id": "chr17:41244435:G>T",
+      "gene": "BRCA1",
+      "consequence": "p.Glu1694Ter",
+      "rb_net_probability": 0.94,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.91,
+      "danger_rank": 3
+    },
+    {
+      "id": 4,
+      "variant_id": "chr12:25398284:C>T",
+      "gene": "KRAS",
+      "consequence": "p.Gly12Asp",
+      "rb_net_probability": 0.93,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.89,
+      "danger_rank": 4
+    },
+    {
+      "id": 5,
+      "variant_id": "chr3:178936091:G>A",
+      "gene": "PIK3CA",
+      "consequence": "p.Glu545Lys",
+      "rb_net_probability": 0.91,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.88,
+      "danger_rank": 5
+    },
+    {
+      "id": 6,
+      "variant_id": "chr13:32914438:G>A",
+      "gene": "BRCA2",
+      "consequence": "p.Trp194Ter",
+      "rb_net_probability": 0.88,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.84,
+      "danger_rank": 6
+    },
+    {
+      "id": 7,
+      "variant_id": "chr10:89717672:G>A",
+      "gene": "PTEN",
+      "consequence": "p.Arg130Gln",
+      "rb_net_probability": 0.85,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.81,
+      "danger_rank": 7
+    },
+    {
+      "id": 8,
+      "variant_id": "chr2:47641560:C>T",
+      "gene": "MSH2",
+      "consequence": "p.Leu390Phe",
+      "rb_net_probability": 0.82,
+      "classification": "Pathogenic",
+      "clinvar_ground_truth": "Pathogenic",
+      "sota_alphamissense": 0.77,
+      "danger_rank": 8
+    }
+  ]
+}
