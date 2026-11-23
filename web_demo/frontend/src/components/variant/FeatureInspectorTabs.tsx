@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Sliders, Database, Compass } from 'lucide-react';
-import { BioFeatures, GeometryFeatures } from '../../types/variant';
+import { BioFeatures, GeometryFeatures } from '@/types';
 
 interface FeatureInspectorTabsProps {
   bioFeatures: BioFeatures;

@@ -12,33 +12,46 @@ import {
   ReferenceLine
 } from "recharts"
 import { 
-  ArrowLeft, 
-  BarChart3, 
-  Activity, 
-  Dna, 
-  Layers, 
-  Database,
+  ArrowLeft,
+  BarChart3,
+  Activity,
+  Binary,
+  Dna,
+  Flame,
+  Layers,
   Loader2,
   ShieldAlert,
-  BrainCircuit
+  BrainCircuit,
+  ChevronRight,
 } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { VariantData } from "@/types"
+import { describeModules, maskToAblationState } from "@/lib/ablation"
+import type { SingleVariantResponse } from "@/types"
 import { fetchVariantXai } from "@/services/api"
 
 export const Xai: React.FC = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  
+
   // Parse query parameters
   const variantIdParam = searchParams.get("variant") || "chr7:140753336:A>T"
   const maskParam = parseInt(searchParams.get("mask") || "15", 10)
   const validMask = (isNaN(maskParam) || maskParam < 0 || maskParam > 15) ? 15 : maskParam
 
-  const [data, setData] = useState<VariantData | null>(null)
+  // Ngữ cảnh điều hướng: mở từ Batch Screening hay Single Variant (mặc định)
+  const fromBatch = searchParams.get("from") === "batch"
+  const back = useMemo(() => {
+    if (fromBatch) return { label: "Back to Batch Screening", crumb: "Batch Screening", to: "/batch" }
+    const params = new URLSearchParams({ variant: variantIdParam, mask: String(validMask) })
+    // Single Variant được mở từ Batch -> giữ ngữ cảnh đó khi quay lại
+    if (searchParams.get("origin") === "batch") params.set("from", "batch")
+    return { label: "Back to Single Variant", crumb: "Single Variant", to: `/single?${params.toString()}` }
+  }, [fromBatch, searchParams, variantIdParam, validMask])
+
+  const [data, setData] = useState<SingleVariantResponse | null>(null)
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -70,15 +83,14 @@ export const Xai: React.FC = () => {
     return () => { isMounted = false }
   }, [variantIdParam, validMask])
 
-  // Decode bitmask (0-15) to feature states
-  const activeFeatures = useMemo(() => {
-    return {
-      dna: (validMask & 8) !== 0,
-      protein: (validMask & 4) !== 0,
-      bio: (validMask & 2) !== 0,
-      geo: (validMask & 1) !== 0
-    }
-  }, [validMask])
+  // Bitmask -> 3 nhóm modality (Bio + Geom + SpliceAI luôn đi cùng nhau)
+  const modules = useMemo(() => maskToAblationState(validMask), [validMask])
+  const moduleRows = [
+    { label: "DNA Sequence (NT-v1 500M)", active: modules.dnaFeatures, icon: Binary, tone: "text-blue-500", on: "bg-blue-50 text-blue-700" },
+    { label: "Protein Sequence (ESM2 650M)", active: modules.proteinFeatures, icon: Dna, tone: "text-purple-500", on: "bg-purple-50 text-purple-700" },
+    { label: "Bio + Geom + SpliceAI", active: modules.bioGeomFeatures, icon: Flame, tone: "text-amber-500", on: "bg-amber-50 text-amber-700" },
+  ]
+  const threshold = data?.meta?.decision_threshold ?? null
 
   // Prepare SHAP chart data
   const chartData = useMemo(() => {
@@ -93,34 +105,52 @@ export const Xai: React.FC = () => {
       }))
   }, [data])
 
+  // chartData đã sắp theo |SHAP| giảm dần -> lấy 3 đầu tiên mỗi phía
+  const topDrivers = useMemo(
+    () => ({
+      positive: chartData.filter((d) => d.isPositive).slice(0, 3),
+      negative: chartData.filter((d) => !d.isPositive).slice(0, 3),
+    }),
+    [chartData]
+  )
+
   return (
-    <div className="space-y-6 text-left max-w-5xl mx-auto">
+    <div className="space-y-6 text-left">
       {/* Header & Navigation */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 uppercase tracking-wider">
-            <BrainCircuit className="h-4 w-4" />
-            <span>Explainable AI (XAI) Analysis</span>
-          </div>
+          <nav className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider" aria-label="Breadcrumb">
+            <button
+              type="button"
+              onClick={() => navigate(back.to)}
+              className="text-slate-500 hover:text-purple-700 hover:underline cursor-pointer"
+            >
+              {back.crumb}
+            </button>
+            <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+            <span className="flex items-center gap-1.5 text-purple-600">
+              <BrainCircuit className="h-4 w-4" />
+              XAI Attribution
+            </span>
+          </nav>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
             SHAP Feature Attribution
           </h1>
+          <p className="text-sm text-slate-500">
+            <span className="font-mono font-semibold text-slate-700">{variantIdParam}</span>
+            <span className="mx-2 text-slate-300">|</span>
+            Active modules: {describeModules(modules)}
+          </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200 shadow-2xs">
-            <Database className="h-3.5 w-3.5 mr-1.5" />
-            Mask: {validMask}/15
-          </Badge>
-          <Button 
-            variant="outline" 
-            onClick={() => navigate('/single')}
-            className="text-xs border-slate-200 hover:bg-slate-50"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Inspector
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          onClick={() => navigate(back.to)}
+          className="text-xs border-slate-200 hover:bg-slate-50 self-start sm:self-auto"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          {back.label}
+        </Button>
       </div>
 
       {/* Loading State */}
@@ -138,21 +168,22 @@ export const Xai: React.FC = () => {
           <ShieldAlert className="h-12 w-12 text-rose-500 mb-3" />
           <h3 className="text-lg font-bold text-rose-800 mb-1">XAI Generation Failed</h3>
           <p className="text-sm text-rose-600 max-w-md">{errorMessage}</p>
-          <Button 
-            variant="outline" 
-            onClick={() => navigate('/single')}
+          <Button
+            variant="outline"
+            onClick={() => navigate(back.to)}
             className="mt-6 bg-white border-rose-200 text-rose-700 hover:bg-rose-100"
           >
-            Return to Screening
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            {back.label}
           </Button>
         </div>
       )}
 
       {/* Main Content */}
       {!isLoading && data && !errorMessage && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column: Context & Metadata */}
-          <div className="space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Column: Context & Metadata (dính khi cuộn) */}
+          <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-24">
             {/* Variant Meta Card */}
             <Card className="border-slate-200 shadow-sm bg-white">
               <CardHeader className="bg-slate-50/50 border-b border-slate-100 pb-4">
@@ -187,6 +218,11 @@ export const Xai: React.FC = () => {
                       {(data.results.rb_net.probability * 100).toFixed(1)}%
                     </span>
                   </div>
+                  {threshold !== null && (
+                    <p className="mt-2 text-xs font-semibold text-slate-700">
+                      Threshold: &ge; {(threshold * 100).toFixed(1)}% &rarr; Pathogenic
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -196,48 +232,60 @@ export const Xai: React.FC = () => {
               <CardHeader className="bg-slate-50/50 border-b border-slate-100 pb-4">
                 <CardTitle className="text-sm flex items-center gap-2">
                   <Layers className="h-4 w-4 text-slate-500" />
-                  Ablation State (Mask: {validMask})
+                  Active Modules
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-4 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-2">
-                    <Dna className="h-3.5 w-3.5 text-blue-500" /> Sequence Context
-                  </span>
-                  <Badge variant={activeFeatures.dna ? "secondary" : "outline"} className={!activeFeatures.dna ? "text-slate-300" : "bg-blue-50 text-blue-700"}>
-                    {activeFeatures.dna ? "Active" : "Ablated"}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-2">
-                    <Dna className="h-3.5 w-3.5 text-purple-500" /> Protein Physico
-                  </span>
-                  <Badge variant={activeFeatures.protein ? "secondary" : "outline"} className={!activeFeatures.protein ? "text-slate-300" : "bg-purple-50 text-purple-700"}>
-                    {activeFeatures.protein ? "Active" : "Ablated"}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-2">
-                    <Activity className="h-3.5 w-3.5 text-amber-500" /> Biological Annot.
-                  </span>
-                  <Badge variant={activeFeatures.bio ? "secondary" : "outline"} className={!activeFeatures.bio ? "text-slate-300" : "bg-amber-50 text-amber-700"}>
-                    {activeFeatures.bio ? "Active" : "Ablated"}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-2">
-                    <Database className="h-3.5 w-3.5 text-emerald-500" /> Spatial Geometry
-                  </span>
-                  <Badge variant={activeFeatures.geo ? "secondary" : "outline"} className={!activeFeatures.geo ? "text-slate-300" : "bg-emerald-50 text-emerald-700"}>
-                    {activeFeatures.geo ? "Active" : "Ablated"}
-                  </Badge>
-                </div>
+                {moduleRows.map(({ label, active, icon: Icon, tone, on }) => (
+                  <div key={label} className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-2">
+                      <Icon className={`h-3.5 w-3.5 ${tone}`} /> {label}
+                    </span>
+                    <Badge variant={active ? "secondary" : "outline"} className={active ? on : "text-slate-400"}>
+                      {active ? "Active" : "Ablated"}
+                    </Badge>
+                  </div>
+                ))}
               </CardContent>
             </Card>
+
+            {/* Top drivers: 3 đặc trưng đẩy mạnh nhất về mỗi phía */}
+            {chartData.length > 0 && (
+              <Card className="border-slate-200 shadow-sm bg-white">
+                <CardHeader className="bg-slate-50/50 border-b border-slate-100 pb-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <BarChart3 className="h-4 w-4 text-slate-500" />
+                    Top Drivers
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 space-y-4">
+                  {[
+                    { title: "Toward Pathogenic", items: topDrivers.positive, tone: "text-rose-700", empty: "No positive contributions." },
+                    { title: "Toward Benign", items: topDrivers.negative, tone: "text-emerald-700", empty: "No negative contributions." },
+                  ].map(({ title, items, tone, empty }) => (
+                    <div key={title} className="space-y-1.5">
+                      <span className={`text-xs font-bold uppercase tracking-wider ${tone}`}>{title}</span>
+                      {items.length === 0 ? (
+                        <p className="text-xs text-slate-400">{empty}</p>
+                      ) : (
+                        items.map((item) => (
+                          <div key={item.name} className="flex items-center justify-between gap-3 text-xs">
+                            <span className="truncate text-slate-700" title={item.description}>{item.name}</span>
+                            <span className="font-mono font-semibold text-slate-800">
+                              {item.isPositive ? "+" : ""}{item.displayValue}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           {/* Right Column: SHAP Chart */}
-          <Card className="lg:col-span-2 border-slate-200 shadow-sm flex flex-col">
+          <Card className="lg:col-span-8 border-slate-200 shadow-sm flex flex-col">
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-purple-600" />
@@ -248,7 +296,7 @@ export const Xai: React.FC = () => {
                 (Positive values push toward Pathogenic, negative toward Benign).
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex-1 p-6 min-h-[400px]">
+            <CardContent className="flex-1 p-6" style={{ height: Math.max(480, chartData.length * 44 + 60) }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={chartData}

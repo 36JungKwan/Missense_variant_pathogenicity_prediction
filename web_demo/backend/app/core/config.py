@@ -38,8 +38,10 @@ class Settings(BaseSettings):
     PROJECT_NAME: str
     API_V1_STR: str
     DATABASE_URL: str
-    MODEL_WEIGHTS_PATH: str = ""
     BACKEND_CORS_ORIGINS: List[str]
+    LOG_LEVEL: str = "INFO"
+    # Nạp sẵn FM, FASTA, FAISS, checkpoint 111 và scaler trong lifespan để request đầu không bị cold-start.
+    PRELOAD_ON_STARTUP: bool = True
 
     # --- Ensembl VEP (Docker, offline) ---
     VEP_CONTAINER_NAME: str = "rbnet_vep"
@@ -51,6 +53,9 @@ class Settings(BaseSettings):
     VEP_CONTAINER_FASTA: str = "/vep_resources/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
     DBNSFP_CONTAINER_PATH: str = "/vep_resources/dbNSFP5.3.1a_grch38.gz"
     VEP_TIMEOUT_SECONDS: int = 900
+    # Batch VCF: bật `--fork` khi số biến thể vượt ngưỡng (1 biến thể thì fork chỉ làm chậm hơn).
+    VEP_FORK_THRESHOLD: int = 50
+    VEP_FORK_WORKERS: int = 4
 
     # --- Tài nguyên tham chiếu trên host ---
     HG38_FASTA_PATH: str = "F:/VEP_RESOURCES/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
@@ -60,7 +65,8 @@ class Settings(BaseSettings):
     )
 
     # --- Foundation models ---
-    DNA_MODEL_ID: str = "InstaDeepAI/nucleotide-transformer-v1-500m-multi-species"
+    # Đối chiếu thống kê embedding với scaler nt_v1_500m_dna_1001_center: khớp bản human-ref.
+    DNA_MODEL_ID: str = "InstaDeepAI/nucleotide-transformer-500m-human-ref"
     PROT_MODEL_ID: str = "facebook/esm2_t33_650M_UR50D"
     DNA_CONFIG_ID: str = "nt_v1_500m_dna_1001_center"
     PROT_CONFIG_ID: str = "esm2_650m_prot_501_center"
@@ -69,6 +75,11 @@ class Settings(BaseSettings):
     DNA_PAD_CHAR: str = "N"
     PROT_PAD_CHAR: str = "X"
     INFERENCE_DEVICE: str = "auto"  # auto | cuda | cpu
+    # Độ chính xác FM trên GPU. fp32: embedding khớp bản CPU đã kiểm chứng (cosine >= 0.9999998, cùng xác suất),
+    # ESM ~330 ms/biến thể. fp16: nhanh ~3x, VRAM 2.7 GB thay vì 5.5 GB, nhưng ESM cosine ~0.99988 (xác suất lệch ~2e-4).
+    FM_CUDA_DTYPE: str = "fp32"
+    # Số biến thể gộp vào một forward pass khi chạy Batch VCF (mỗi biến thể = 3 chuỗi: masked_ref, ref, alt).
+    FM_BATCH_VARIANTS: int = 8
     HF_HOME: Optional[str] = None  # nơi lưu trọng số HuggingFace (nên đặt trên ổ còn trống)
 
     # --- Artifact của nhóm ---
@@ -81,6 +92,8 @@ class Settings(BaseSettings):
     MODEL_DECISION_THRESHOLDS: Dict[str, float] = DEFAULT_DECISION_THRESHOLDS
     ROUTER_TEMPERATURE: float = 0.3074146877278755  # hparam không nằm trong state_dict
     SHAP_PERMUTATIONS: int = 128
+    SHAP_EVAL_CHUNK: int = 2048  # số dòng mask mỗi lần forward khi ước lượng Shapley
+    SPLICEAI_WINDOW_SIZE: int = 1024  # bp mỗi truy vấn tabix (chỉ giải nén các block BGZF quanh vị trí cần tra)
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

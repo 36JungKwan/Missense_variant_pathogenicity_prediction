@@ -1,14 +1,12 @@
 import re
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from app.core.errors import InvalidVariantError, NoModalitySelectedError
 
 PredictionLabel = Literal["Pathogenic", "Benign"]
 # "Uncertain": ClinVar không có nhãn rõ ràng (VUS / conflicting / chưa có bản ghi).
 ClassificationLabel = Literal["Pathogenic", "Benign", "Uncertain"]
-
-PATHOGENIC_THRESHOLD: float = 0.5
 
 MODALITY_ORDER: Tuple[str, ...] = ("dna", "prot", "bio", "geom")
 
@@ -50,6 +48,16 @@ def compute_ablation_mask(
         | (int(bio_enabled) << 1)
         | int(geo_enabled)
     )
+
+
+def mask_to_flags(mask: int) -> Dict[str, bool]:
+    """Bitmask 0..15 -> 4 cờ *_enabled (nghịch đảo của compute_ablation_mask)."""
+    return {
+        "dna_enabled": bool(mask & 8),
+        "protein_enabled": bool(mask & 4),
+        "bio_enabled": bool(mask & 2),
+        "geo_enabled": bool(mask & 1),
+    }
 
 
 def mask_to_modalities(mask: int) -> Tuple[str, ...]:

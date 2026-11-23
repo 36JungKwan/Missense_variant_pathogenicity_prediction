@@ -1,372 +1,119 @@
+"""Trích xuất embedding center-pooling + LLR cho nhiều biến thể trong MỘT forward pass.
+
+Mỗi biến thể đóng góp 3 chuỗi vào batch: [masked_ref, ref, alt]
+  * masked_ref -> LLR = log p(alt) - log p(ref) tại token đột biến (Masked LM)
+  * ref / alt  -> hidden state lớp cuối tại token đột biến (E_ref / E_alt)
+
+Kết quả tương đương phiên bản gốc (3 forward riêng, batch=1, output_hidden_states=True):
+hidden_states[-1] của encoder ESM chính là last_hidden_state (sau emb_layer_norm_after).
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import List, Sequence
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import pandas as pd
-import numpy as np
-import gc
-from tqdm import tqdm
-from torch.utils.data import Dataset, DataLoader
 
-# ==========================================
-# 1. DATASET BỘ ĐỌC PARQUET
-# ==========================================
-class BioSequenceDataset(Dataset):
-    """
-    Dataset tối ưu để nạp dữ liệu từ file Parquet thành các batch cho PyTorch.
-    """
-    def __init__(self, parquet_path: str, seq_type: str, ref_col: str = None, alt_col: str = None):
-        """
-        Args:
-            parquet_path: Đường dẫn file Parquet.
-            seq_type: "dna" hoặc "protein".
-            ref_col/alt_col: cột sequence được chọn cho lần chạy hiện tại.
-        """
-        self.df = pd.read_parquet(parquet_path)
-        self.seq_type = seq_type
-        
-        if (ref_col is None) != (alt_col is None):
-            raise ValueError("ref_col và alt_col phải được truyền cùng nhau.")
+from .models import BioModelManager
 
-        # Baseline hiện tại dùng một length cố định; truyền explicit columns để
-        # các length khác có thể được chạy sau này như một ablation riêng.
-        if ref_col is None:
-            if seq_type == "dna":
-                ref_col, alt_col = "ref_seq_601", "alt_seq_601"
-            elif seq_type == "protein":
-                ref_col, alt_col = "prot_ref_seq_101", "prot_alt_seq_101"
-            else:
-                raise ValueError(f"seq_type không hợp lệ: {seq_type}")
+logger = logging.getLogger("app.ml_core.fm_extractor")
 
-        self.ref_col = ref_col
-        self.alt_col = alt_col
-        
-        # Đảm bảo dữ liệu tồn tại
-        if self.ref_col not in self.df.columns or self.alt_col not in self.df.columns:
-            raise ValueError(f"File Parquet thiếu cột {self.ref_col} hoặc {self.alt_col}")
 
-        # Sequence-length ablations use the same centered variant convention
-        # as the Module 1 sequence columns. Infer the 0-based center from the
-        # selected column instead of reusing the 601/101 baseline positions.
-        ref_lengths = self.df[self.ref_col].dropna().astype(str).str.len()
-        alt_lengths = self.df[self.alt_col].dropna().astype(str).str.len()
-        if len(ref_lengths) == 0 or len(alt_lengths) == 0:
-            raise ValueError(f"Cột sequence rỗng: {self.ref_col}/{self.alt_col}")
-        if ref_lengths.nunique() != 1 or alt_lengths.nunique() != 1:
-            raise ValueError(
-                f"Sequence length không cố định cho {self.ref_col}/{self.alt_col}: "
-                f"ref={sorted(ref_lengths.unique().tolist())[:5]}, "
-                f"alt={sorted(alt_lengths.unique().tolist())[:5]}"
-            )
-        if int(ref_lengths.iloc[0]) != int(alt_lengths.iloc[0]):
-            raise ValueError(
-                f"Ref/alt sequence khác length cho {self.ref_col}/{self.alt_col}: "
-                f"ref={int(ref_lengths.iloc[0])}, alt={int(alt_lengths.iloc[0])}"
-            )
-        self.default_variant_pos = int(ref_lengths.iloc[0]) // 2
+@dataclass
+class EmbeddingBatch:
+    center_ref: np.ndarray  # (N, D) float32 (đã lượng tử hoá fp16 như lúc train)
+    center_alt: np.ndarray  # (N, D)
+    llr: np.ndarray  # (N,)
 
-        # Tìm cột vị trí đột biến nếu có để tránh phụ thuộc hoàn toàn vào vị trí hard-code.
-        # Luu y: khong dung cot POS/pos vi thuong la toa do genomic goc,
-        # khong phai vi tri trong chuoi da dua vao tokenizer.
-        candidate_pos_cols = (
-            "variant_char_pos",
-            "mut_char_pos",
-            "mutation_pos",
-            "mut_pos",
-            "variant_pos",
+    @staticmethod
+    def concat(parts: Sequence["EmbeddingBatch"]) -> "EmbeddingBatch":
+        return EmbeddingBatch(
+            np.concatenate([p.center_ref for p in parts]),
+            np.concatenate([p.center_alt for p in parts]),
+            np.concatenate([p.llr for p in parts]),
         )
-        self.variant_pos_col = next((c for c in candidate_pos_cols if c in self.df.columns), None)
-        if self.variant_pos_col is None:
-            self.variant_char_positions = np.full(len(self.df), self.default_variant_pos, dtype=np.int64)
-        else:
-            numeric_pos = pd.to_numeric(self.df[self.variant_pos_col], errors="coerce")
-            self.variant_char_positions = (
-                numeric_pos.fillna(self.default_variant_pos).astype(np.int64).to_numpy()
-            )
 
-    def __len__(self):
-        return len(self.df)
 
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        return {
-            "name": row["Variant_ID"],
-            "ref_seq": row[self.ref_col],
-            "alt_seq": row[self.alt_col],
-            "variant_char_pos": int(self.variant_char_positions[idx]),
-        }
+def _pad_to(tensor: torch.Tensor, length: int, value: int) -> torch.Tensor:
+    return F.pad(tensor, (0, length - tensor.shape[1]), value=value) if tensor.shape[1] < length else tensor
 
-# ==========================================
-# 2. FEATURE EXTRACTOR (CORE PIPELINE)
-# ==========================================
+
 class FeatureExtractor:
-    def __init__(self, model_manager):
-        self.manager = model_manager
-        self.device = model_manager.device
-        self.tokenizer = model_manager.tokenizer
-        self.model = model_manager.model
+    def __init__(self, manager: BioModelManager):
+        self.manager = manager
+        self.tokenizer = manager.tokenizer
+        self.model = manager.model
+        self.device = manager.device
+        self._base = self.model.base_model  # EsmForMaskedLM.esm
+        self._lm_head = getattr(self.model, "lm_head", None)
 
-    def _tokenize_batch(self, sequences):
-        """Tokenize có hỗ trợ offset_mapping cho các mô hình dùng FastTokenizer"""
-        # Kiểm tra xem tokenizer có phải là Fast không để bật offset_mapping
+    def _tokenize(self, sequences: List[str]):
         kwargs = {"return_tensors": "pt", "padding": True, "truncation": True}
         if self.tokenizer.is_fast:
             kwargs["return_offsets_mapping"] = True
+        tokenized = self.tokenizer(sequences, **kwargs)
+        if "attention_mask" not in tokenized:
+            tokenized["attention_mask"] = torch.ones_like(tokenized["input_ids"])
+        return tokenized
 
-        tokenized = self.tokenizer(sequences, **kwargs).to(self.device)
-        return self._pad_for_ntv3_if_needed(tokenized)
-
-    def _pad_for_ntv3_if_needed(self, tokenized_outputs):
-        """Pad token length theo downsampling factor ?? skip tensors kh?p chi?u."""
-        if "ntv3" not in self.manager.model_id.lower():
-            return tokenized_outputs
-
-        input_ids = tokenized_outputs["input_ids"]
-        seq_len = int(input_ids.shape[1])
-        num_downsamples = int(getattr(self.model.config, "num_downsamples", 7))
-        multiple = 2 ** num_downsamples
-        target_len = ((seq_len + multiple - 1) // multiple) * multiple
-        if target_len == seq_len:
-            if "attention_mask" not in tokenized_outputs:
-                tokenized_outputs["attention_mask"] = torch.ones_like(input_ids, device=self.device)
-            return tokenized_outputs
-
-        pad_len = target_len - seq_len
-        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
-
-        tokenized_outputs["input_ids"] = F.pad(input_ids, (0, pad_len), value=pad_id)
-
-        if "attention_mask" in tokenized_outputs:
-            tokenized_outputs["attention_mask"] = F.pad(tokenized_outputs["attention_mask"], (0, pad_len), value=0)
-        else:
-            attention_mask = torch.ones_like(input_ids, device=self.device)
-            tokenized_outputs["attention_mask"] = F.pad(attention_mask, (0, pad_len), value=0)
-
-        if "offset_mapping" in tokenized_outputs:
-            tokenized_outputs["offset_mapping"] = F.pad(tokenized_outputs["offset_mapping"], (0, 0, 0, pad_len), value=0)
-
-        return tokenized_outputs
-
-    def _compute_llr(self, logits, variant_indices, ref_ids, alt_ids):
-        """Tính Log-Likelihood Ratio theo đúng công thức phân phối xác suất."""
-        batch_size = logits.size(0)
-        llrs = []
-        
-        for i in range(batch_size):
-            var_idx = variant_indices[i]
-            
-            # Xử lý bài toán Off-by-one của Causal LM (EVO2)
-            if self.manager.model_type == "causal":
-                var_idx = max(0, var_idx - 1)
-                
-            logit_target = logits[i, var_idx, :]
-            log_probs = F.log_softmax(logit_target, dim=-1)
-            
-            llr = log_probs[alt_ids[i]] - log_probs[ref_ids[i]]
-            llrs.append(llr.item())
-            
-        return torch.tensor(llrs, dtype=torch.float32)
-
-    def _get_hidden_states_safe(self, outputs_emb):
-        """Hàm hỗ trợ trích xuất hidden states an toàn cho mọi kiến trúc (bao gồm ESMC)"""
-        if hasattr(outputs_emb, "hidden_states") and outputs_emb.hidden_states is not None:
-            return outputs_emb.hidden_states[-1]
-        elif isinstance(outputs_emb, dict) and "hidden_states" in outputs_emb:
-            return outputs_emb["hidden_states"][-1]
-        else:
-            return outputs_emb[0]
-
-    def _extract_poolings(self, hidden_states, attention_mask, variant_indices):
-        """Trích xuất 3 loại vector nhúng: Center, Mean, CLS"""
-        batch_size = hidden_states.size(0)
-        
-        # 1. CLS Pooling (Token đầu tiên)
-        cls_pooling = hidden_states[:, 0, :]
-        
-        # 2. Center Pooling (Token tại vị trí đột biến)
-        center_pooling = torch.stack([hidden_states[i, variant_indices[i], :] for i in range(batch_size)])
-        
-        # 3. Mean Pooling (Bỏ qua Padding tokens)
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(hidden_states.size()).float()
-        sum_embeddings = torch.sum(hidden_states * input_mask_expanded, 1)
-        sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-        mean_pooling = sum_embeddings / sum_mask
-        
-        return cls_pooling, center_pooling, mean_pooling
-
-    def _process_batch_with_oom_protection(self, batch_data, seq_type, profiler=None):
-        """Xử lý forward pass an toàn, đệ quy chia đôi batch nếu tràn RAM (OOM)"""
-        names = batch_data["name"]
-        ref_seqs = batch_data["ref_seq"]
-        alt_seqs = batch_data["alt_seq"]
-        variant_char_pos = batch_data["variant_char_pos"]
-        batch_size = len(names)
-        
+    @torch.inference_mode()
+    def embed(self, ref_seqs: List[str], alt_seqs: List[str], centers: List[int], seq_type: str) -> EmbeddingBatch:
         try:
-            with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
-                # 1. Chuẩn bị token (Tokenize một lần duy nhất để tái sử dụng)
-                inputs_ref = self._tokenize_batch(ref_seqs)
-                inputs_alt = self._tokenize_batch(alt_seqs)
+            return self._embed(ref_seqs, alt_seqs, centers, seq_type)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(ref_seqs) == 1:
+                raise
+            mid = len(ref_seqs) // 2
+            logger.warning("CUDA OOM with %d variants per forward; splitting into %d + %d",
+                           len(ref_seqs), mid, len(ref_seqs) - mid)
+            return EmbeddingBatch.concat([
+                self.embed(ref_seqs[:mid], alt_seqs[:mid], centers[:mid], seq_type),
+                self.embed(ref_seqs[mid:], alt_seqs[mid:], centers[mid:], seq_type),
+            ])
 
-                # Mot so tokenizer (dac biet custom remote code) co the khong tra ve attention_mask.
-                # Fallback ve mask toan 1 de giu tuong thich cho toan bo pipeline.
-                attention_mask_ref = inputs_ref.get("attention_mask")
-                if attention_mask_ref is None:
-                    attention_mask_ref = torch.ones_like(inputs_ref["input_ids"], device=self.device)
+    def _embed(self, ref_seqs, alt_seqs, centers, seq_type) -> EmbeddingBatch:
+        n = len(ref_seqs)
+        tok_ref = self._tokenize(list(ref_seqs))
+        tok_alt = self._tokenize(list(alt_seqs))
+        var_idx = self.manager.get_variant_token_index(tok_ref, seq_type, centers, tokenized_alt=tok_alt)
 
-                attention_mask_alt = inputs_alt.get("attention_mask")
-                if attention_mask_alt is None:
-                    attention_mask_alt = torch.ones_like(inputs_alt["input_ids"], device=self.device)
-                
-                var_indices = self.manager.get_variant_token_index(
-                    inputs_ref,
-                    seq_type,
-                    target_char_positions=variant_char_pos,
-                    tokenized_alt=inputs_alt,
-                )
-                
-                # Trích xuất ID của allele gốc và đột biến
-                ref_ids = [inputs_ref["input_ids"][i, var_indices[i]].item() for i in range(batch_size)]
-                alt_ids = [inputs_alt["input_ids"][i, var_indices[i]].item() for i in range(batch_size)]
+        rows = torch.arange(n)
+        idx = torch.tensor(var_idx)
+        ref_ids = tok_ref["input_ids"][rows, idx]
+        alt_ids = tok_alt["input_ids"][rows, idx]
 
-                if profiler is not None and not profiler._gflops_measured:
-                    # Truyền đúng kích thước batch=1 để tính GFLOPs per sample
-                    dummy_inputs = (inputs_ref["input_ids"][0:1], attention_mask_ref[0:1])
-                    profiler.measure_gflops(self.model, dummy_inputs)
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        length = max(tok_ref["input_ids"].shape[1], tok_alt["input_ids"].shape[1])
+        ids_ref = _pad_to(tok_ref["input_ids"], length, pad_id)
+        ids_alt = _pad_to(tok_alt["input_ids"], length, pad_id)
+        att_ref = _pad_to(tok_ref["attention_mask"], length, 0)
+        att_alt = _pad_to(tok_alt["attention_mask"], length, 0)
+        ids_masked = ids_ref.clone()
+        ids_masked[rows, idx] = self.manager.mask_token_id
 
-                # 2. Tính LLR (Log-Likelihood Ratio)
-                if self.manager.model_type == "mlm":
-                    # Masked LM: Chạy chuỗi bị MASK (Tái sử dụng input_ids từ inputs_ref)
-                    masked_input_ids = self.manager.prepare_masked_inputs(inputs_ref["input_ids"], var_indices)
-                    if profiler is not None: profiler.tic()
-                    outputs_llr = self.model(input_ids=masked_input_ids, attention_mask=attention_mask_ref)
-                    if profiler is not None: profiler.toc()
-                else:
-                    # Causal LM: Chạy thẳng chuỗi Ref
-                    if profiler is not None: profiler.tic()
-                    outputs_llr = self.model(input_ids=inputs_ref["input_ids"], attention_mask=attention_mask_ref)
-                    if profiler is not None: profiler.toc()
-                
-                llr_scores = self._compute_llr(outputs_llr.logits, var_indices, ref_ids, alt_ids)
-                
-                # Giải phóng RAM lập tức cho biến logits khổng lồ
-                del outputs_llr
-                
-                # =======================================================
-                # 3. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI REF
-                # =======================================================
-                if profiler is not None: profiler.tic()
-                outputs_ref = self.model(
-                    input_ids=inputs_ref["input_ids"], 
-                    attention_mask=attention_mask_ref, 
-                    output_hidden_states=True
-                )
-                if profiler is not None: profiler.toc()
-                hidden_ref = self._get_hidden_states_safe(outputs_ref)
-                cls_ref, center_ref, mean_ref = self._extract_poolings(hidden_ref, attention_mask_ref, var_indices)
-                del outputs_ref, hidden_ref
-                
-                # =======================================================
-                # 4. TRÍCH XUẤT EMBEDDINGS CHO CHUỖI ALT
-                # =======================================================
-                if profiler is not None: profiler.tic()
-                outputs_alt = self.model(
-                    input_ids=inputs_alt["input_ids"], 
-                    attention_mask=attention_mask_alt, 
-                    output_hidden_states=True
-                )
-                if profiler is not None: profiler.toc()
+        input_ids = torch.cat([ids_masked, ids_ref, ids_alt]).to(self.device)
+        attention = torch.cat([att_ref, att_ref, att_alt]).to(self.device)
+        hidden = self._base(input_ids=input_ids, attention_mask=attention)[0]  # (3N, L, D)
 
-                hidden_alt = self._get_hidden_states_safe(outputs_alt)
-                cls_alt, center_alt, mean_alt = self._extract_poolings(hidden_alt, attention_mask_alt, var_indices)
-                del outputs_alt, hidden_alt
-                
-                # Chuyển đổi về CPU float16 NumPy để lưu trữ
-                return {
-                    "names": names,
-                    "llr": llr_scores.cpu().numpy(),
-                    "cls_ref": cls_ref.cpu().numpy().astype(np.float16),
-                    "cls_alt": cls_alt.cpu().numpy().astype(np.float16),
-                    "center_ref": center_ref.cpu().numpy().astype(np.float16),
-                    "center_alt": center_alt.cpu().numpy().astype(np.float16),
-                    "mean_ref": mean_ref.cpu().numpy().astype(np.float16),
-                    "mean_alt": mean_alt.cpu().numpy().astype(np.float16)
-                }
-                
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                torch.cuda.empty_cache()
-                gc.collect()
-                if batch_size == 1:
-                    raise RuntimeError("OOM với Batch Size = 1. Cần giảm kích thước chuỗi (context length) hoặc đổi GPU.")
-                
-                print(f"\n[!] Cảnh báo OOM. Đang chia đôi batch từ {batch_size} -> {batch_size // 2}...")
-                mid = batch_size // 2
-                
-                # Đệ quy chia lô
-                batch_part_1 = {k: v[:mid] for k, v in batch_data.items()}
-                batch_part_2 = {k: v[mid:] for k, v in batch_data.items()}
-                
-                res_1 = self._process_batch_with_oom_protection(batch_part_1, seq_type, profiler)
-                res_2 = self._process_batch_with_oom_protection(batch_part_2, seq_type, profiler)
+        idx_dev = idx.to(self.device)
+        rows_dev = rows.to(self.device)
+        h_masked = hidden[rows_dev, idx_dev]
+        h_ref = hidden[n + rows_dev, idx_dev]
+        h_alt = hidden[2 * n + rows_dev, idx_dev]
 
-                # Gộp kết quả
-                return {k: np.concatenate([res_1[k], res_2[k]]) if k != "names" else res_1[k] + res_2[k] for k in res_1.keys()}
-            else:
-                raise e
+        if self._lm_head is not None:
+            logits = self._lm_head(h_masked)
+        else:  # model không tách lm_head: chạy lại phần masked qua model đầy đủ
+            logits = self.model(input_ids=input_ids[:n], attention_mask=attention[:n]).logits[rows_dev, idx_dev]
+        log_probs = F.log_softmax(logits.float(), dim=-1)
+        llr = log_probs[rows_dev, alt_ids.to(self.device)] - log_probs[rows_dev, ref_ids.to(self.device)]
 
-    def run_extraction(
-        self,
-        parquet_path: str,
-        seq_type: str,
-        batch_size: int,
-        output_prefix: str,
-        profiler=None,
-        ref_col: str = None,
-        alt_col: str = None,
-    ):
-        """Chạy toàn bộ file Parquet và lưu 3 file .pt cho 3 chiến lược pooling"""
-        dataset = BioSequenceDataset(parquet_path, seq_type, ref_col=ref_col, alt_col=alt_col)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-        
-        all_results = {
-            "names": [], "llr": [], 
-            "cls_ref": [], "cls_alt": [], 
-            "center_ref": [], "center_alt": [], 
-            "mean_ref": [], "mean_alt": []
-        }
+        # Lượng tử hoá fp16 như pipeline huấn luyện (embedding được lưu dạng float16).
+        def _np(t: torch.Tensor) -> np.ndarray:
+            return t.float().cpu().numpy().astype(np.float16).astype(np.float32)
 
-        if profiler is not None:
-            profiler.reset_peak_memory()
-
-        print(f"[*] Đang trích xuất: {parquet_path}")
-        for batch in tqdm(dataloader, desc="Inference"):
-            res = self._process_batch_with_oom_protection(batch, seq_type, profiler=profiler)
-            for k in all_results.keys():
-                if k == "names":
-                    all_results[k].extend(res[k])
-                else:
-                    all_results[k].append(res[k])
-                    
-        if profiler is not None:
-            profiler.calculate_final_metrics(num_samples=len(dataset))
-
-        print("[*] Đang lưu các ma trận đặc trưng...")
-        
-        # Nối tất cả numpy arrays và đóng gói thành Tensor
-        final_llr = torch.tensor(np.concatenate(all_results["llr"]), dtype=torch.float32)
-        
-        poolings = ["cls", "center", "mean"]
-        for p in poolings:
-            e_ref_tensor = torch.tensor(np.concatenate(all_results[f"{p}_ref"]))
-            e_alt_tensor = torch.tensor(np.concatenate(all_results[f"{p}_alt"]))
-            
-            output_dict = {
-                "metadata": all_results["names"],
-                "llr": final_llr,
-                "E_ref": e_ref_tensor,
-                "E_alt": e_alt_tensor
-            }
-            save_path = f"{output_prefix}_{p}.pt"
-            torch.save(output_dict, save_path)
-            print(f"  -> Đã lưu: {save_path} (Bao gồm E_ref và E_alt)")
-            
-        print("[+] Hoàn tất trích xuất!\n")
+        return EmbeddingBatch(_np(h_ref), _np(h_alt), llr.cpu().numpy().astype(np.float32))

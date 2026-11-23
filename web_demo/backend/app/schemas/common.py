@@ -13,8 +13,9 @@ class ModelResults(BaseModel):
 
 
 class SotaScores(BaseModel):
-    alphamissense: float = Field(..., ge=0.0, le=1.0)
-    revel: float = Field(..., ge=0.0, le=1.0)
+    # None = dbNSFP không có điểm cho biến thể này (Frontend hiển thị "N/A").
+    alphamissense: Optional[float] = Field(None, ge=0.0, le=1.0)
+    revel: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 class ShapItem(BaseModel):

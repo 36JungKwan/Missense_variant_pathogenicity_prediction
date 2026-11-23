@@ -1,8 +1,10 @@
 """Chú thích biến thể bằng Ensembl VEP offline chạy trong Docker (`docker exec <container> vep ...`)."""
 from __future__ import annotations
 
+import logging
 import math
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,7 +12,10 @@ from typing import Dict, List, Optional, Sequence
 
 from app.core.config import settings
 from app.core.constants import BIO_CORE_COLUMNS, VariantKey
-from app.core.errors import VepUnavailableError
+from app.core.errors import NonMissenseVariantError, VepUnavailableError
+from app.core.log import timed_stage
+
+logger = logging.getLogger("app.services.vep_runner")
 
 DBNSFP_FIELDS = [
     "GERP++_NR", "GERP++_RS", "GERP_92_mammals",
@@ -67,8 +72,18 @@ def _clean(raw: Optional[str]) -> Optional[str]:
     return None if raw in (None, "", "-", ".") else raw
 
 
-def _build_command(container_in: str, container_out: str) -> List[str]:
+def ensure_missense(record: VepRecord) -> VepRecord:
+    """Missense Gatekeeper: chặn mọi biến thể mà VEP (--pick, MANE Select/Canonical) không gán missense_variant."""
+    if not record.is_missense:
+        raise NonMissenseVariantError(record.variant_id, record.consequence)
+    return record
+
+
+def _build_command(container_in: str, container_out: str, n_variants: int = 1) -> List[str]:
     plugin = ",".join(["dbNSFP", settings.DBNSFP_CONTAINER_PATH, *DBNSFP_FIELDS])
+    # Chỉ song song hoá khi lô đủ lớn; cấu hình chú thích giữ nguyên để đặc trưng khớp lúc huấn luyện.
+    fork = (["--fork", str(settings.VEP_FORK_WORKERS)]
+            if n_variants > settings.VEP_FORK_THRESHOLD and settings.VEP_FORK_WORKERS > 1 else [])
     return [
         "docker", "exec", settings.VEP_CONTAINER_NAME, "vep",
         "-i", container_in, "-o", container_out,
@@ -82,6 +97,7 @@ def _build_command(container_in: str, container_out: str) -> List[str]:
         "--symbol", "--protein", "--hgvs",
         "--af", "--af_gnomade", "--check_existing",
         "--plugin", plugin,
+        *fork,
     ]
 
 
@@ -129,12 +145,12 @@ def annotate_variants(variants: Sequence[VariantKey]) -> Dict[str, VepRecord]:
         lines.append("\t".join([v.chrom, str(v.pos), variant_id, v.ref, v.alt, ".", ".", "."]))
     host_in.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
 
+    command = _build_command(f"{container_dir}/{job}.vcf", f"{container_dir}/{job}.tsv", len(unique))
+    started = time.perf_counter()
     try:
         try:
-            proc = subprocess.run(
-                _build_command(f"{container_dir}/{job}.vcf", f"{container_dir}/{job}.tsv"),
-                capture_output=True, text=True, timeout=settings.VEP_TIMEOUT_SECONDS,
-            )
+            with timed_stage("vep"):
+                proc = subprocess.run(command, capture_output=True, text=True, timeout=settings.VEP_TIMEOUT_SECONDS)
         except FileNotFoundError as exc:
             raise VepUnavailableError("Docker CLI not found on PATH; cannot run Ensembl VEP.") from exc
         except subprocess.TimeoutExpired as exc:
@@ -165,4 +181,6 @@ def annotate_variants(variants: Sequence[VariantKey]) -> Dict[str, VepRecord]:
 
     for variant_id in unique:
         records.setdefault(variant_id, VepRecord(variant_id=variant_id, consequence="not_annotated_by_vep"))
+    logger.info("VEP annotated %d variant(s) in %d ms%s", len(unique),
+                (time.perf_counter() - started) * 1000, " (--fork)" if "--fork" in command else "")
     return records

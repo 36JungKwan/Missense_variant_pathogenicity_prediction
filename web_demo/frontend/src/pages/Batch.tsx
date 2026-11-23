@@ -12,18 +12,15 @@ import {
   ListFilter,
   BarChart3,
   Download,
-  Layers,
-  Binary,
-  Dna,
-  Flame,
-  Box,
-  RotateCcw
+  UploadCloud,
+  ChevronRight,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
+import { FeatureAblationPanel } from "@/components/ablation/FeatureAblationPanel"
+import { ablationStateToMask, countActiveModules, normalizeAblationState } from "@/lib/ablation"
 import {
   Table,
   TableBody,
@@ -37,6 +34,8 @@ import { BatchVariant, AblationState } from "@/types"
 import { createVcfStreamService, BatchStreamEvent } from "@/services/api"
 
 const STORAGE_KEY = "rbnet_batch_state"
+const ACCEPTED_EXTENSIONS = [".vcf", ".csv", ".txt", ".parquet", ".xlsx"]
+const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.join(",")
 
 export const Batch: React.FC = () => {
   const navigate = useNavigate()
@@ -72,14 +71,14 @@ export const Batch: React.FC = () => {
   const [streamedVariants, setStreamedVariants] = useState<BatchVariant[]>(savedState?.streamedVariants || [])
   const [dangerQueue, setDangerQueue] = useState<BatchVariant[]>(savedState?.dangerQueue || [])
 
-  // Ablation Feature Toggles
-  const [ablation, setAblation] = useState<AblationState>(savedState?.ablation || {
-    dnaFeatures: true,
-    proteinFeatures: true,
-    biologicalFeatures: true,
-    spatialGeometry: true,
-  })
-  
+  // Ablation: 3 nhóm (DNA, Protein, Bio+Geom+SpliceAI); chuyển đổi tự động từ trạng thái 4 công tắc cũ.
+  const [ablation, setAblation] = useState<AblationState>(normalizeAblationState(savedState?.ablation))
+  // Mask của lần chạy gần nhất: dùng khi mở chi tiết/XAI để đọc đúng bản ghi cache trong PostgreSQL.
+  const [runMask, setRunMask] = useState<number>(
+    typeof savedState?.runMask === "number" ? savedState.runMask : ablationStateToMask(ablation)
+  )
+  const [isDragging, setIsDragging] = useState<boolean>(false)
+
   const streamServiceRef = useRef<{ cancel: () => void } | null>(null)
 
   // --- 3. Lưu State vào SessionStorage mỗi khi có thay đổi ---
@@ -89,9 +88,10 @@ export const Batch: React.FC = () => {
       stats,
       streamedVariants,
       dangerQueue,
-      ablation
+      ablation,
+      runMask,
     }))
-  }, [progress, stats, streamedVariants, dangerQueue, ablation])
+  }, [progress, stats, streamedVariants, dangerQueue, ablation, runMask])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -102,35 +102,37 @@ export const Batch: React.FC = () => {
     }
   }, [])
 
-  // Đếm số tính năng đang bật
-  const activeToggleCount = useMemo(() => {
-    let count = 0
-    if (ablation.dnaFeatures) count++
-    if (ablation.proteinFeatures) count++
-    if (ablation.biologicalFeatures) count++
-    if (ablation.spatialGeometry) count++
-    return count
-  }, [ablation])
+  const activeToggleCount = useMemo(() => countActiveModules(ablation), [ablation])
 
-  // Reset tính năng
-  const handleResetToggles = () => {
-    setAblation({
-      dnaFeatures: true,
-      proteinFeatures: true,
-      biologicalFeatures: true,
-      spatialGeometry: true,
-    })
-  }
-
-  // Chọn file mới -> Reset toàn bộ bảng dữ liệu
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null
+  // Chọn / kéo thả file mới -> kiểm tra định dạng rồi reset toàn bộ bảng dữ liệu
+  const selectFile = (file: File | null) => {
+    if (file && !ACCEPTED_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))) {
+      setStreamError(`Unsupported file "${file.name}". Accepted formats: ${ACCEPTED_EXTENSIONS.join(", ")}.`)
+      return
+    }
     setSelectedFile(file)
     setStreamError(null)
     setStreamedVariants([])
     setDangerQueue([])
     setProgress(0)
     setStats({ totalProcessed: 0, missenseAccepted: 0, nonMissenseRejected: 0 })
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => selectFile(e.target.files?.[0] || null)
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setIsDragging(false)
+    if (!isStreaming) selectFile(e.dataTransfer.files?.[0] || null)
+  }
+
+  // Mở chi tiết một biến thể (giao diện Single Variant, đọc cache PostgreSQL của lần chạy batch)
+  const openVariantDetail = (variantId: string) => {
+    navigate(`/single?${new URLSearchParams({ variant: variantId, mask: String(runMask), from: "batch" })}`)
+  }
+
+  const openVariantXai = (variantId: string) => {
+    navigate(`/xai?${new URLSearchParams({ variant: variantId, mask: String(runMask), from: "batch" })}`)
   }
 
   // --- 4. Stream Handlers ---
@@ -147,6 +149,7 @@ export const Batch: React.FC = () => {
     setStats({ totalProcessed: 0, missenseAccepted: 0, nonMissenseRejected: 0 })
     setStreamError(null)
     setIsStreaming(true)
+    setRunMask(ablationStateToMask(ablation))
 
     const service = createVcfStreamService(
       selectedFile, 
@@ -219,7 +222,7 @@ export const Batch: React.FC = () => {
       v.rb_net_probability,
       v.classification,
       v.clinvar_ground_truth,
-      v.sota_alphamissense
+      v.sota_alphamissense ?? "N/A"
     ])
 
     const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n")
@@ -234,7 +237,7 @@ export const Batch: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 text-left max-w-6xl mx-auto pb-10">
+    <div className="space-y-6 text-left pb-10">
       {/* Header */}
       <div className="space-y-1">
         <div className="flex items-center justify-between">
@@ -255,22 +258,40 @@ export const Batch: React.FC = () => {
         </p>
       </div>
 
-      {/* Control Panel & Progress */}
+      {/* Dashboard 2 cột: điều khiển (trái) | tiến trình + kết quả (phải); màn hình nhỏ tự xếp 1 cột */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* ===== Cột trái: điều khiển pipeline + ablation ===== */}
+      <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-24">
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         <CardContent className="p-0">
-          <div className="flex flex-col md:flex-row border-b border-slate-100">
-            {/* Left: Actions */}
-            <div className="p-6 md:w-1/3 bg-slate-50/50 flex flex-col justify-center gap-4">
+            <div className="p-6 bg-slate-50/50 flex flex-col justify-center gap-4">
               <div>
                 <h3 className="text-sm font-semibold text-slate-800">Pipeline Control</h3>
-                <div className="mt-2">
-                  <input 
-                    type="file" 
-                    accept=".vcf,.txt,.csv" 
+                <div
+                  className={`mt-2 p-3 rounded-lg border-2 border-dashed transition-colors ${
+                    isDragging ? "border-indigo-400 bg-indigo-50" : "border-slate-200 bg-white"
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    if (!isStreaming) setIsDragging(true)
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                >
+                  <div className="flex items-center gap-2 text-xs text-slate-600 mb-2">
+                    <UploadCloud className="h-4 w-4 text-indigo-500" />
+                    <span>Drop a file here or browse</span>
+                  </div>
+                  <input
+                    type="file"
+                    accept={ACCEPT_ATTR}
                     onChange={handleFileChange}
                     disabled={isStreaming}
-                    className="text-xs w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-indigo-50 file:text-indigo-700 file:font-semibold hover:file:bg-indigo-100 text-slate-500 border border-slate-200 rounded-md cursor-pointer disabled:opacity-50 bg-white" 
+                    className="text-xs w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-indigo-50 file:text-indigo-700 file:font-semibold hover:file:bg-indigo-100 text-slate-500 border border-slate-200 rounded-md cursor-pointer disabled:opacity-50 bg-white"
                   />
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    VCF / CSV / TXT / Parquet / Excel (.xlsx) — columns CHROM, POS, REF, ALT (any case) or chrN:POS:REF&gt;ALT ids.
+                  </p>
                 </div>
                 {selectedFile && (
                   <p className="text-[10px] text-slate-500 mt-1.5 font-mono">
@@ -306,9 +327,23 @@ export const Batch: React.FC = () => {
                 )}
               </div>
             </div>
+        </CardContent>
+      </Card>
 
-            {/* Right: Progress & Stats */}
-            <div className="p-6 md:w-2/3 border-l border-slate-100 space-y-5">
+      <FeatureAblationPanel
+        value={ablation}
+        onChange={setAblation}
+        disabled={isStreaming}
+        title="Feature Ablation Selection"
+        orientation="vertical"
+      />
+      </div>
+
+      {/* ===== Cột phải: tiến trình, thống kê, kết quả stream ===== */}
+      <div className="lg:col-span-8 space-y-6">
+      <Card className="border-slate-200 shadow-sm overflow-hidden">
+        <CardContent className="p-0">
+            <div className="p-6 space-y-5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Activity className={`h-5 w-5 ${isStreaming ? "text-indigo-600 animate-pulse" : "text-slate-400"}`} />
@@ -339,7 +374,6 @@ export const Batch: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
         </CardContent>
       </Card>
 
@@ -354,66 +388,17 @@ export const Batch: React.FC = () => {
         </div>
       )}
 
-      {/* Ablation Toggles */}
-      <Card className="border-slate-200 shadow-sm">
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Layers className="h-4 w-4 text-indigo-600" />
-              <span>Feature Ablation Selection</span>
-            </CardTitle>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-xs border-slate-200">
-                {activeToggleCount}/4 Modules
-              </Badge>
-              {activeToggleCount < 4 && (
-                <Button variant="ghost" size="sm" onClick={handleResetToggles} disabled={isStreaming} className="h-7 px-2 text-xs text-slate-600" title="Enable all modules">
-                  <RotateCcw className="h-3 w-3 mr-1" /> Reset
-                </Button>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-                <Binary className="h-4 w-4 text-blue-500" /> DNA
-              </div>
-              <Switch disabled={isStreaming} checked={ablation.dnaFeatures} onCheckedChange={(c) => setAblation(p => ({ ...p, dnaFeatures: c }))} />
-            </div>
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-                <Dna className="h-4 w-4 text-purple-500" /> Protein
-              </div>
-              <Switch disabled={isStreaming} checked={ablation.proteinFeatures} onCheckedChange={(c) => setAblation(p => ({ ...p, proteinFeatures: c }))} />
-            </div>
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-                <Flame className="h-4 w-4 text-amber-500" /> Bio
-              </div>
-              <Switch disabled={isStreaming} checked={ablation.biologicalFeatures} onCheckedChange={(c) => setAblation(p => ({ ...p, biologicalFeatures: c }))} />
-            </div>
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-                <Box className="h-4 w-4 text-emerald-500" /> Spatial (LVD)
-              </div>
-              <Switch disabled={isStreaming} checked={ablation.spatialGeometry} onCheckedChange={(c) => setAblation(p => ({ ...p, spatialGeometry: c }))} />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Bảng stream | hàng đợi ưu tiên */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
 
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Left Col: Live Stream Table */}
-        <Card className="lg:col-span-2 border-slate-200 shadow-sm flex flex-col h-[500px]">
+        {/* Live Stream Table */}
+        <Card className="xl:col-span-3 border-slate-200 shadow-sm flex flex-col h-[500px]">
           <CardHeader className="py-4 border-b border-slate-100 bg-slate-50/50">
             <CardTitle className="text-sm flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <Database className="h-4 w-4 text-slate-500" />
                 Accepted Missense Variants
+                <span className="text-xs font-normal text-slate-500">(click a row for full detail)</span>
               </span>
               <div className="flex gap-2 items-center">
                 <Badge variant="secondary" className="font-mono text-xs">
@@ -445,26 +430,40 @@ export const Batch: React.FC = () => {
                     <TableHead>Variant</TableHead>
                     <TableHead>Gene</TableHead>
                     <TableHead className="text-right">Probability</TableHead>
+                    <TableHead className="w-[32px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {streamedVariants.map((v, i) => (
-                    <TableRow 
+                    <TableRow
                       key={`${v.variant_id}-${i}`}
-                      className={`transition-colors duration-500 ${
+                      role="button"
+                      tabIndex={0}
+                      title="Open full variant detail"
+                      onClick={() => openVariantDetail(v.variant_id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          openVariantDetail(v.variant_id)
+                        }
+                      }}
+                      className={`group cursor-pointer transition-colors duration-500 hover:bg-indigo-50 focus:outline-none focus-visible:bg-indigo-50 ${
                         v.isNewStreamItem ? "bg-indigo-50/50" : ""
                       }`}
                     >
                       <TableCell className="font-mono text-xs text-slate-500">#{v.id}</TableCell>
-                      <TableCell className="font-medium text-xs">{v.variant_id}</TableCell>
+                      <TableCell className="font-medium text-xs text-indigo-700 group-hover:underline">{v.variant_id}</TableCell>
                       <TableCell className="text-xs">{v.gene}</TableCell>
                       <TableCell className="text-right">
-                        <Badge 
+                        <Badge
                           variant={v.classification === "Pathogenic" ? "destructive" : "success"}
                           className="font-mono text-xs"
                         >
                           {(v.rb_net_probability * 100).toFixed(1)}%
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-slate-300 group-hover:text-indigo-500">
+                        <ChevronRight className="h-4 w-4" />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -475,7 +474,7 @@ export const Batch: React.FC = () => {
         </Card>
 
         {/* Right Col: High-Risk Queue */}
-        <Card className="border-rose-200 shadow-sm flex flex-col h-[500px] overflow-hidden">
+        <Card className="xl:col-span-2 border-rose-200 shadow-sm flex flex-col h-[500px] overflow-hidden">
           <CardHeader className="py-4 border-b border-rose-100 bg-rose-50">
             <CardTitle className="text-sm flex items-center text-rose-800">
               <AlertTriangle className="h-4 w-4 mr-2" />
@@ -494,11 +493,17 @@ export const Batch: React.FC = () => {
             ) : (
               <div className="divide-y divide-slate-100">
                 {dangerQueue.map((v, i) => {
-                  const currentMask = (ablation.dnaFeatures ? 8 : 0) | (ablation.proteinFeatures ? 4 : 0) | (ablation.biologicalFeatures ? 2 : 0) | (ablation.spatialGeometry ? 1 : 0);
                   return (
                     <div key={`danger-${v.variant_id}-${i}`} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="font-mono text-xs font-bold text-slate-800">{v.variant_id}</span>
+                        <button
+                          type="button"
+                          onClick={() => openVariantDetail(v.variant_id)}
+                          className="font-mono text-xs font-bold text-slate-800 hover:text-indigo-700 hover:underline cursor-pointer"
+                          title="Open full variant detail"
+                        >
+                          {v.variant_id}
+                        </button>
                         <Badge variant="destructive" className="font-mono text-[10px] px-1.5 py-0">
                           {(v.rb_net_probability * 100).toFixed(1)}%
                         </Badge>
@@ -512,7 +517,7 @@ export const Batch: React.FC = () => {
                         variant="outline" 
                         size="sm" 
                         className="w-full text-xs h-7 text-indigo-600 border-indigo-200 hover:bg-indigo-50"
-                        onClick={() => navigate(`/xai?variant=${encodeURIComponent(v.variant_id)}&mask=${currentMask}`)}
+                        onClick={() => openVariantXai(v.variant_id)}
                       >
                         <BarChart3 className="h-3 w-3 mr-1.5" />
                         View Explainability
@@ -524,6 +529,8 @@ export const Batch: React.FC = () => {
             )}
           </CardContent>
         </Card>
+      </div>
+      </div>
       </div>
     </div>
   )

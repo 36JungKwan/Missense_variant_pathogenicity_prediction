@@ -1,6 +1,6 @@
 import React from 'react';
 import { Dna, Layers, Activity, Compass, Lock, RotateCcw } from 'lucide-react';
-import { ModalityKey } from '../../types/variant';
+import { ModalityKey } from '@/types';
 
 interface ModalityTogglePanelProps {
   activeModalities: ModalityKey[];

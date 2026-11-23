@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import gzip
 from pathlib import Path
 import struct
+import threading
 from typing import Iterable
 
 import numpy as np
@@ -324,6 +325,18 @@ class IndexedSpliceAILookup:
             raise FileNotFoundError(f"Không tìm thấy SpliceAI VCF: {self.vcf_path}")
         if not Path(f"{self.vcf_path}.tbi").is_file():
             raise FileNotFoundError(f"Không tìm thấy tabix index: {self.vcf_path}.tbi")
+        # Parse .tbi (~150 ms) một lần rồi giữ lại; khoá vì file handle dùng seek() không thread-safe.
+        self._lock = threading.Lock()
+        self._reader: NativeTabixReader | None = None
+
+    def _tabix(self) -> NativeTabixReader:
+        if self._reader is None:
+            self._reader = NativeTabixReader(self.vcf_path)
+        return self._reader
+
+    def warm_up(self) -> None:
+        with self._lock:
+            self._tabix()
 
     @staticmethod
     def _validate_and_prepare(df: pd.DataFrame) -> pd.DataFrame:
@@ -369,8 +382,8 @@ class IndexedSpliceAILookup:
         # original key -> (priority, match type, SpliceAI values)
         matched: dict[tuple[str, int, str, str], tuple[int, str, np.ndarray]] = {}
 
-        tabix = NativeTabixReader(self.vcf_path)
-        try:
+        with self._lock:
+            tabix = self._tabix()
             contig_aliases = _vcf_contig_aliases(tabix.contigs)
             query["_vcf_contig"] = query["_chrom"].map(contig_aliases)
             query = query.dropna(subset=["_vcf_contig"])
@@ -427,8 +440,6 @@ class IndexedSpliceAILookup:
                                 or (priority == current[0] and np.nanmax(values[:4]) > np.nanmax(current[2][:4]))
                             ):
                                 matched[source_key] = (priority, match_type, values)
-        finally:
-            tabix.close()
 
         rows = []
         for (chrom, pos, ref, alt), (_, match_type, values) in matched.items():

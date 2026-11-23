@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, BigInteger, SmallInteger, DateTime, ForeignKey, Index, text
+from sqlalchemy import Column, String, Float, BigInteger, SmallInteger, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector

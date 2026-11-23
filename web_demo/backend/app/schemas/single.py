@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 from app.core.constants import ClassificationLabel
 from app.schemas.common import ModelResults, SotaScores, ShapItem
@@ -26,6 +26,8 @@ class InferenceMeta(BaseModel):
     architecture: Optional[str] = None
     decision_threshold: Optional[float] = None
     warnings: List[str] = []
+    # Thời gian từng chặng (ms): vep, spliceai, fm_dna, fm_prot, geom, norm, shap, db
+    timings_ms: Dict[str, int] = {}
 
 
 class SingleVariantResponse(BaseModel):

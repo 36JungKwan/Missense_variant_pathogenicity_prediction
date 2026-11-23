@@ -9,6 +9,7 @@ import torch
 
 from app.core.config import settings
 from app.core.constants import PredictionLabel
+from app.core.log import timed_stage
 from app.services.checkpoint_registry import LoadedModel
 from app.services.feature_pipeline import VariantFeatures, normalize_tabular
 
@@ -92,12 +93,13 @@ def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
     def forward(dna_b, prot_b, tab_b) -> torch.Tensor:
         return loaded.forward_logit(dna_b, prot_b, tab_b).float()
 
-    logit = forward(
-        dna[None] if dna is not None else None,
-        prot[None] if prot is not None else None,
-        tabular[None] if tabular is not None else None,
-    )
-    probability = float(torch.sigmoid(logit)[0])
+    with timed_stage("shap"):
+        logit = forward(
+            dna[None] if dna is not None else None,
+            prot[None] if prot is not None else None,
+            tabular[None] if tabular is not None else None,
+        )
+        probability = float(torch.sigmoid(logit)[0])
 
     # Người chơi Shapley: khối embedding DNA, khối embedding Protein, và từng đặc trưng bảng.
     # Baseline = 0: delta embedding bằng 0 (không đổi) và giá trị trung tâm của tập train sau chuẩn hoá.
@@ -111,8 +113,9 @@ def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
 
     def value_fn(masks: np.ndarray) -> np.ndarray:
         outputs = []
-        for start in range(0, len(masks), 2048):
-            m = torch.tensor(masks[start:start + 2048], device=device)
+        chunk = settings.SHAP_EVAL_CHUNK
+        for start in range(0, len(masks), chunk):
+            m = torch.tensor(masks[start:start + chunk], device=device)
             col = 0
             dna_b = prot_b = tab_b = None
             if dna is not None:
@@ -126,7 +129,8 @@ def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
             outputs.append(forward(dna_b, prot_b, tab_b).cpu().numpy())
         return np.concatenate(outputs)
 
-    phi = _shapley_values(value_fn, len(players), settings.SHAP_PERMUTATIONS)
+    with timed_stage("shap"):
+        phi = _shapley_values(value_fn, len(players), settings.SHAP_PERMUTATIONS)
 
     items: List[Dict[str, Any]] = []
     for (kind, column), contribution in zip(players, phi):

@@ -45,6 +45,12 @@ def _get_proteome() -> Fasta:
         return _proteome
 
 
+def preload() -> None:
+    """Mở sẵn hg38 + proteome (đọc .fai) để request đầu không mất ~2,7 s."""
+    _get_genome()
+    _get_proteome()
+
+
 def _centered_window(sequence_length: int, center0: int, window: int) -> Tuple[int, int, int, int]:
     """Trả (start, end, pad_left, pad_right) cho cửa sổ [center-half, center+half]."""
     half = window // 2

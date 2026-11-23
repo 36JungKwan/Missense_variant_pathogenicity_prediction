@@ -1,22 +1,37 @@
-# Python & Environments
+# ---- Secrets & local config ----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-.env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
 
-# Frontend
+# ---- Model weights & large artifacts (copy manually, see backend/artifacts) ----
+backend/artifacts/*.pth
+backend/artifacts/faiss_indexes/
+*.index
+*.safetensors
+
+# ---- Node / Vite ----
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
+npm-debug.log*
 
-# Model Checkpoints & Large Indexes (>100MB GitHub limit)
-backend/artifacts/*.pth
-backend/artifacts/faiss_indexes/*.index
-backend/ml_artifacts/*
-!backend/ml_artifacts/.gitkeep
+# ---- IDE / OS ----
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
 
-# Temp & Local Data
-*.parquet
-*.vcf
-tmp_io/
-.vscode/
+# ---- Runtime output ----
+logs/
+*.log
+predictions*.csv

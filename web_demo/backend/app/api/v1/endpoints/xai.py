@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+
+from app.core.constants import mask_to_flags
 from app.db.session import get_db
 from app.schemas.single import SingleVariantRequest
 from app.services.inference_service import run_single_variant_inference
@@ -16,22 +18,6 @@ def get_variant_xai(
     """SHAP cho một biến thể dưới một ablation mask; đọc cache PostgreSQL hoặc tính mới bằng pipeline thật."""
     res = run_single_variant_inference(
         db=db,
-        request=SingleVariantRequest(
-            variant_id=variant_id,
-            dna_enabled=bool((ablation_mask >> 3) & 1),
-            protein_enabled=bool((ablation_mask >> 2) & 1),
-            bio_enabled=bool((ablation_mask >> 1) & 1),
-            geo_enabled=bool(ablation_mask & 1),
-            use_cache=True,
-        ),
+        request=SingleVariantRequest(variant_id=variant_id, use_cache=True, **mask_to_flags(ablation_mask)),
     )
-    return {
-        "variant_id": res.variant_id,
-        "gene": res.gene,
-        "consequence": res.consequence,
-        "clinvar_ground_truth": res.clinvar_ground_truth,
-        "results": res.results.model_dump(),
-        "sota": res.sota.model_dump(),
-        "shap_analysis": [item.model_dump() for item in res.shap_analysis],
-        "meta": res.meta.model_dump(),
-    }
+    return res.model_dump()

@@ -1,22 +1,28 @@
 import asyncio
-import csv
-import io
+import logging
+import time
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.constants import VARIANT_ID_PATTERN, compute_ablation_mask, parse_variant_id
-from app.core.errors import InvalidVariantError, NonMissenseVariantError, PipelineError
+from app.core.constants import compute_ablation_mask, parse_variant_id
+from app.core.config import settings
+from app.core.errors import InvalidUploadError, InvalidVariantError, NonMissenseVariantError, PipelineError
 from app.db.session import get_db, SessionLocal
 from app.schemas.single import SingleVariantRequest, SingleVariantResponse
 from app.schemas.batch import BatchVariant, BatchStreamEvent
+from app.services.upload_parser import parse_uploaded_variants
 from app.services.inference_service import (
     prefetch_annotations,
+    prepare_features_batch,
     resolve_model,
     run_single_variant_inference,
 )
 
+logger = logging.getLogger("app.api.predict")
 router = APIRouter()
 
 
@@ -29,81 +35,19 @@ def predict_single_variant(
     return run_single_variant_inference(db=db, request=request)
 
 
-def _parse_uploaded_variants(raw_bytes: bytes, filename: str = "") -> List[str]:
-    """
-    Hỗ trợ parse linh hoạt và khử trùng lặp (giữ nguyên thứ tự):
-    - File .vcf chuẩn (#CHROM  POS  ID  REF  ALT ...)
-    - File .csv hoặc .txt chứa danh sách chrN:POS:REF>ALT hoặc các cột CHROM, POS, REF, ALT
-    """
-    seen = set()
-    variant_ids: List[str] = []
-
-    def _add_unique(raw_candidate: str) -> None:
-        if VARIANT_ID_PATTERN.match(raw_candidate.strip()):
-            norm = parse_variant_id(raw_candidate).variant_id
-            if norm not in seen:
-                seen.add(norm)
-                variant_ids.append(norm)
-
-    text_content = raw_bytes.decode("utf-8", errors="ignore")
-    lower_name = filename.lower()
-
-    # Trường hợp file CSV
-    if lower_name.endswith(".csv"):
-        reader = csv.reader(io.StringIO(text_content))
-        for row in reader:
-            if not row:
-                continue
-            matched_in_cell = False
-            for cell in row:
-                val = cell.strip()
-                if VARIANT_ID_PATTERN.match(val):
-                    _add_unique(val)
-                    matched_in_cell = True
-                    break
-            if not matched_in_cell and len(row) >= 4 and row[1].strip().isdigit():
-                chrom = row[0].strip()
-                pos = row[1].strip()
-                ref = row[2].strip().upper()
-                alt = row[3].strip().split(",")[0].strip().upper()
-                _add_unique(f"{chrom}:{pos}:{ref}>{alt}")
-        return variant_ids
-
-    # Trường hợp file VCF hoặc TXT
-    for line in text_content.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        cols = stripped.split("\t") if "\t" in stripped else stripped.split()
-        if len(cols) >= 5 and cols[1].isdigit():
-            chrom = cols[0].strip()
-            pos = cols[1].strip()
-            ref = cols[3].strip().upper()
-            alt = cols[4].split(",")[0].strip().upper()
-            if alt != ".":
-                _add_unique(f"{chrom}:{pos}:{ref}>{alt}")
-            continue
-
-        if VARIANT_ID_PATTERN.match(stripped):
-            _add_unique(stripped)
-
-    return variant_ids
-
-
 def _get_demo_cohort_variants() -> List[str]:
-    """Cohort mẫu (toạ độ GRCh38). Hậu quả thật do VEP quyết định, không còn tra bảng cứng."""
+    """Cohort mẫu: các đột biến missense kinh điển, toạ độ GRCh38 (REF đã đối chiếu với hg38 FASTA)."""
     return [
         "chr7:140753336:A>T",   # BRAF p.Val600Glu
-        "chr17:41245466:G>A",   # toạ độ hg19 cũ của BRCA1 -> minh hoạ kiểm tra REF/gatekeeper
-        "chr13:32906729:A>C",   # toạ độ hg19 cũ của BRCA2
         "chr17:7674220:C>T",    # TP53 p.Arg248Gln
         "chr17:7673802:C>T",    # TP53 p.Arg273His
+        "chr17:7675088:C>T",    # TP53 p.Arg175His
         "chr12:25245350:C>T",   # KRAS p.Gly12Asp
-        "chr17:7675088:C>T",    # TP53
-        "chr3:178936091:G>A",   # toạ độ hg19 cũ của PIK3CA
-        "chr10:89692904:C>T",   # toạ độ hg19 cũ của PTEN
-        "chr1:115256529:T>C",   # toạ độ hg19 cũ của NRAS
+        "chr3:179234297:A>G",   # PIK3CA p.His1047Arg
+        "chr3:179218303:G>A",   # PIK3CA p.Glu545Lys
+        "chr7:55191822:T>G",    # EGFR p.Leu858Arg
+        "chr2:208248388:C>T",   # IDH1 p.Arg132His
+        "chr1:114713908:T>C",   # NRAS p.Gln61Arg
     ]
 
 
@@ -126,6 +70,7 @@ def _create_batch_sse_response(
         db = SessionLocal()
         accepted_count = 0
         rejected_count = 0
+        started = time.perf_counter()
 
         def _summary() -> dict:
             return {
@@ -140,79 +85,116 @@ def _create_batch_sse_response(
                 return
 
             # Một lần chạy VEP + tra SpliceAI cho toàn bộ file (chạy trong thread để không chặn event loop).
+            keys = [parse_variant_id(vid) for vid in variant_queue]
             try:
-                keys = [parse_variant_id(vid) for vid in variant_queue]
                 prefetched = await asyncio.to_thread(prefetch_annotations, db, keys)
             except PipelineError as exc:
                 db.rollback()
                 yield _event(type="stream_error", progress_percent=0, reason=exc.message, error_code=exc.error_code)
                 return
+            except OperationalError:
+                logger.error("Database unavailable during batch prefetch")
+                yield _event(type="stream_error", progress_percent=0, error_code="DATABASE_UNAVAILABLE",
+                             reason="PostgreSQL is not reachable. Start Docker Desktop and the rbnet_postgres container.")
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("Batch prefetch failed")
+                yield _event(type="stream_error", progress_percent=0, error_code="INTERNAL_ERROR",
+                             reason="Unexpected inference error (see server log).")
+                return
 
-            for idx, vid in enumerate(variant_queue, start=1):
-                progress = int((idx / total_count) * 100)
-                req = SingleVariantRequest(
-                    variant_id=vid,
-                    dna_enabled=dna_enabled,
-                    protein_enabled=protein_enabled,
-                    bio_enabled=bio_enabled,
-                    geo_enabled=geo_enabled,
-                    use_cache=True,
-                )
+            done = 0
+            chunk_size = max(1, settings.FM_BATCH_VARIANTS)
+            for chunk_start in range(0, total_count, chunk_size):
+                chunk_keys = keys[chunk_start:chunk_start + chunk_size]
+                # Foundation Models chạy gộp cho cả nhóm; đặc trưng được lưu vào DB trước khi suy luận.
                 try:
-                    res = await asyncio.to_thread(run_single_variant_inference, db, req, prefetched)
-                    accepted_count += 1
-                    yield _event(
-                        type="variant_stream",
-                        progress_percent=progress,
-                        variant=BatchVariant(
-                            id=accepted_count,
-                            variant_id=res.variant_id,
-                            gene=res.gene,
-                            consequence=res.consequence,
-                            rb_net_probability=res.results.rb_net.probability,
-                            classification=res.results.rb_net.label,
-                            clinvar_ground_truth=res.clinvar_ground_truth,
-                            sota_alphamissense=res.sota.alphamissense,
-                            danger_rank=accepted_count,
-                        ),
-                    )
-                except NonMissenseVariantError as exc:
-                    db.rollback()
-                    rejected_count += 1
-                    yield _event(
-                        type="variant_skipped",
-                        progress_percent=progress,
-                        variant_id=exc.variant_id,
-                        detected_consequence=exc.detected_consequence,
-                        reason=f"Rejected by gatekeeper: Non-missense variant ({exc.detected_consequence}).",
-                        error_code=exc.error_code,
-                    )
-                except InvalidVariantError as exc:
-                    # Lỗi riêng của biến thể (REF sai build, không phải SNV...) -> bỏ qua, chạy tiếp.
-                    db.rollback()
-                    rejected_count += 1
-                    yield _event(
-                        type="variant_skipped",
-                        progress_percent=progress,
-                        variant_id=vid,
-                        detected_consequence="invalid_variant",
-                        reason=exc.message,
-                        error_code=exc.error_code,
-                    )
+                    failures = await asyncio.to_thread(prepare_features_batch, db, chunk_keys, prefetched)
                 except PipelineError as exc:
-                    # Lỗi hạ tầng (thiếu scaler, VEP/Docker tắt...) ảnh hưởng mọi biến thể -> dừng stream.
                     db.rollback()
-                    yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                    yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
                                  reason=exc.message, error_code=exc.error_code)
                     return
-                except Exception as exc:  # noqa: BLE001 - báo lỗi về UI thay vì cắt stream im lặng
+                except Exception:  # noqa: BLE001 - báo lỗi về UI thay vì cắt stream im lặng
+                    logger.exception("Batch feature extraction failed")
                     db.rollback()
-                    yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
-                                 reason=f"Unexpected inference error: {exc}", error_code="INTERNAL_ERROR")
+                    yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
+                                 reason="Unexpected inference error (see server log).", error_code="INTERNAL_ERROR")
                     return
 
-                await asyncio.sleep(max(0, stream_delay_ms) / 1000.0)
+                for key in chunk_keys:
+                    vid = key.variant_id
+                    done += 1
+                    progress = int(done / total_count * 100)
+                    req = SingleVariantRequest(
+                        variant_id=vid,
+                        dna_enabled=dna_enabled,
+                        protein_enabled=protein_enabled,
+                        bio_enabled=bio_enabled,
+                        geo_enabled=geo_enabled,
+                        use_cache=True,
+                    )
+                    try:
+                        if vid in failures:
+                            raise failures[vid]
+                        res = await asyncio.to_thread(run_single_variant_inference, db, req, prefetched)
+                        accepted_count += 1
+                        yield _event(
+                            type="variant_stream",
+                            progress_percent=progress,
+                            variant=BatchVariant(
+                                id=accepted_count,
+                                variant_id=res.variant_id,
+                                gene=res.gene,
+                                consequence=res.consequence,
+                                rb_net_probability=res.results.rb_net.probability,
+                                classification=res.results.rb_net.label,
+                                clinvar_ground_truth=res.clinvar_ground_truth,
+                                sota_alphamissense=res.sota.alphamissense,
+                                danger_rank=accepted_count,
+                            ),
+                        )
+                    except NonMissenseVariantError as exc:
+                        db.rollback()
+                        rejected_count += 1
+                        yield _event(
+                            type="variant_skipped",
+                            progress_percent=progress,
+                            variant_id=exc.variant_id,
+                            detected_consequence=exc.detected_consequence,
+                            reason=f"Rejected by gatekeeper: Non-missense variant ({exc.detected_consequence}).",
+                            error_code=exc.error_code,
+                        )
+                    except InvalidVariantError as exc:
+                        # Lỗi riêng của biến thể (REF sai build, không phải SNV...) -> bỏ qua, chạy tiếp.
+                        db.rollback()
+                        rejected_count += 1
+                        yield _event(
+                            type="variant_skipped",
+                            progress_percent=progress,
+                            variant_id=vid,
+                            detected_consequence="invalid_variant",
+                            reason=exc.message,
+                            error_code=exc.error_code,
+                        )
+                    except PipelineError as exc:
+                        # Lỗi hạ tầng (thiếu scaler, VEP/Docker tắt...) ảnh hưởng mọi biến thể -> dừng stream.
+                        db.rollback()
+                        yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                                     reason=exc.message, error_code=exc.error_code)
+                        return
+                    except Exception:  # noqa: BLE001
+                        logger.exception("Batch inference failed for %s", vid)
+                        db.rollback()
+                        yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                                     reason="Unexpected inference error (see server log).", error_code="INTERNAL_ERROR")
+                        return
 
+                    if stream_delay_ms > 0:
+                        await asyncio.sleep(stream_delay_ms / 1000.0)
+
+            logger.info("batch completed variants=%d accepted=%d rejected=%d total=%dms", total_count,
+                        accepted_count, rejected_count, (time.perf_counter() - started) * 1000)
             yield _event(type="stream_completed", progress_percent=100, summary=_summary())
         finally:
             db.close()
@@ -222,7 +204,7 @@ def _create_batch_sse_response(
 
 @router.get("/batch-stream")
 async def predict_batch_stream(
-    stream_delay_ms: int = Query(120),
+    stream_delay_ms: int = Query(0, ge=0),
     dna_enabled: bool = Query(True),
     protein_enabled: bool = Query(True),
     bio_enabled: bool = Query(True),
@@ -242,23 +224,22 @@ async def predict_batch_stream(
 @router.post("/batch-upload")
 async def predict_batch_upload(
     file: UploadFile = File(...),
-    stream_delay_ms: int = Form(120),
+    stream_delay_ms: int = Form(0, ge=0),
     dna_enabled: bool = Form(True),
     protein_enabled: bool = Form(True),
     bio_enabled: bool = Form(True),
     geo_enabled: bool = Form(True),
 ):
     """
-    Nhận file .vcf / .csv / .txt từ Frontend, parse tọa độ biến thể, chạy VEP thật,
+    Nhận file .vcf / .csv / .txt / .parquet / .xlsx từ Frontend, parse tọa độ biến thể, chạy VEP thật,
     lọc qua Missense Gatekeeper và trả về luồng SSE trực tiếp.
     """
     raw_bytes = await file.read()
-    variant_queue = _parse_uploaded_variants(raw_bytes, filename=file.filename or "")
+    variant_queue = parse_uploaded_variants(raw_bytes, filename=file.filename or "")
 
     if not variant_queue:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No valid genomic variants found in '{file.filename}'. Expected VCF rows or chrN:POS:REF>ALT coordinates.",
+        raise InvalidUploadError(
+            f"No valid genomic variants found in '{file.filename}'. Expected VCF rows or chrN:POS:REF>ALT coordinates."
         )
 
     return _create_batch_sse_response(

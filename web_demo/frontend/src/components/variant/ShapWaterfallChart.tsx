@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { ShapContribution } from '../../types/variant';
+import { ShapContribution } from '@/types';
 
 interface ShapWaterfallChartProps {
   explanations: ShapContribution[];

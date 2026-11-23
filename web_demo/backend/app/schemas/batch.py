@@ -11,7 +11,7 @@ class BatchVariant(BaseModel):
     rb_net_probability: float
     classification: PredictionLabel
     clinvar_ground_truth: ClassificationLabel
-    sota_alphamissense: float
+    sota_alphamissense: Optional[float] = None
     danger_rank: int
 
 

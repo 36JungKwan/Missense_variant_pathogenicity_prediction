@@ -1,32 +1,34 @@
-# React + TypeScript + Vite
+# RB-Net Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite + Tailwind UI for the RB-Net missense variant pathogenicity system.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # type-check + production build into dist/
+npm run lint     # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Environment variables (`.env.local`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | FastAPI backend base URL |
+| `VITE_USE_MOCK_API` | `false` | `true` = offline demo using `src/services/api.mock.ts` |
+
+## Layout
+
+```
+src/
+  pages/            Home, Single (single variant), Batch (VCF screening, SSE), Xai (SHAP)
+  services/api.ts   FastAPI client (single, xai, batch-upload / batch-stream SSE)
+  services/api.mock.ts  offline simulation used only when VITE_USE_MOCK_API=true
+  lib/ablation.ts   ablation mask helpers (bit 3 DNA, 2 Protein, 1 Bio, 0 Geometry)
+  types/index.ts    all shared types (mirrors backend/app/schemas)
+  mock/mockData.json presets for the Single page + mock-mode data
+```
+
+API errors have one shape: `{"detail": {"error_code", "message", "request_id"}}`.
+SOTA scores (`alphamissense`, `revel`) are `null` when dbNSFP has no score and are shown as "N/A".

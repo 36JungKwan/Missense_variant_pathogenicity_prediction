@@ -1,226 +1,103 @@
-import os
-import pandas as pd
-import numpy as np
-import joblib
-import warnings
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler, QuantileTransformer
-from sklearn.preprocessing import RobustScaler
+"""Chuẩn hoá đặc trưng Bio + Geometry V2 bằng scaler .pkl fit trên tập train (train3).
 
+Toán học giữ nguyên `AdvancedFeatureNormalizer.transform_bio` / `transform_geom_v2` của pipeline huấn
+luyện; khác biệt duy nhất là các file .pkl được nạp MỘT lần rồi cache thay vì unpickle ở mỗi request.
+"""
+from __future__ import annotations
+
+import threading
+import warnings
+from pathlib import Path
+from typing import Any, Dict
+
+import joblib
+import numpy as np
+import pandas as pd
 
 GEOM_V2_COLUMNS = ["LLR", "LVD_L2", "LVD_Cosine", "LID", "LVD_Relative"]
 GEOM_V2_LOG_COLUMNS = ["LVD_L2", "LVD_Cosine", "LID", "LVD_Relative"]
 
-class AdvancedFeatureNormalizer:
-    """
-    Module 4: Xử lý hậu kỳ (Điền khuyết & Chuẩn hóa) các đặc trưng sinh học từ VEP.
-    Phân tách logic nghiêm ngặt giữa dải xác suất [0,1] và dải điểm vô cực.
-    """
+BIO_FREQ_COLS = ["AF", "gnomADe_AF"]
+BIO_PHAST_COLS = ["phastCons100way_vertebrate", "phastCons470way_mammalian", "phastCons17way_primate"]
+BIO_PHYLO_GERP_COLS = [
+    "phyloP100way_vertebrate", "phyloP470way_mammalian", "phyloP17way_primate",
+    "GERP++_RS", "GERP++_NR", "GERP_92_mammals",
+]
+BIO_SPLICEAI_COLS = [
+    "SpliceAI_pred_DS_AG", "SpliceAI_pred_DS_AL", "SpliceAI_pred_DS_DG", "SpliceAI_pred_DS_DL", "SpliceAI_pred_DS_max",
+    "SpliceAI_pred_DP_AG", "SpliceAI_pred_DP_AL", "SpliceAI_pred_DP_DG", "SpliceAI_pred_DP_DL",
+]
+BIO_MEAN_IMPUTE_COLS = BIO_PHAST_COLS + BIO_PHYLO_GERP_COLS
+
+BIO_SCALER_FILES = {
+    "mean_imputer": "bio_mean_imputer.pkl",
+    "freq_scaler": "bio_freq_scaler.pkl",
+    "phast_scaler": "bio_phast_scaler.pkl",
+    "phylo_scaler": "bio_phylo_scaler.pkl",
+    "spliceai_fill_values": "bio_spliceai_fill_values.pkl",
+    "spliceai_scaler": "bio_spliceai_scaler.pkl",
+}
+
+
+def geom_scaler_filename(config_id: str) -> str:
+    return f"{config_id}_geom_v2_scalers.pkl"
+
+
+def _load(path: Path) -> Any:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # InconsistentVersionWarning của sklearn khi unpickle
+        return joblib.load(path)
+
+
+def _coerce_numeric(df: pd.DataFrame, cols) -> pd.DataFrame:
+    for col in cols:
+        if col not in df.columns:
+            raise ValueError(f"Missing feature column: {col}")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+class FeatureNormalizer:
     def __init__(self, epsilon: float = 1e-8):
         self.epsilon = float(epsilon)
-        self.geom_llr_cols = ["LLR"]
-        self.geom_lvd_cols = ["LVD_L2", "LVD_Cosine"]
-        self.geom_lid_cols = ["LID"]
+        self._lock = threading.Lock()
+        self._bio: Dict[Path, Dict[str, Any]] = {}
+        self._geom: Dict[Path, Dict[str, Any]] = {}
 
-        self.bio_freq_cols = ["AF", "gnomADe_AF"]
-        self.bio_phast_cols = [
-            "phastCons100way_vertebrate", "phastCons470way_mammalian", "phastCons17way_primate"
-        ]
-        self.bio_phylo_gerp_cols = [
-            "phyloP100way_vertebrate", "phyloP470way_mammalian", "phyloP17way_primate",
-            "GERP++_RS", "GERP++_NR", "GERP_92_mammals"
-        ]
-        self.bio_spliceai_score_cols = [
-            "SpliceAI_pred_DS_AG", "SpliceAI_pred_DS_AL", "SpliceAI_pred_DS_DG",
-            "SpliceAI_pred_DS_DL", "SpliceAI_pred_DS_max"
-        ]
-        self.bio_spliceai_position_cols = [
-            "SpliceAI_pred_DP_AG", "SpliceAI_pred_DP_AL", "SpliceAI_pred_DP_DG",
-            "SpliceAI_pred_DP_DL"
-        ]
-        self.bio_spliceai_cols = self.bio_spliceai_score_cols + self.bio_spliceai_position_cols
-        self.bio_mean_impute_cols = self.bio_phast_cols + self.bio_phylo_gerp_cols
+    def bio_artifacts(self, directory: Path) -> Dict[str, Any]:
+        with self._lock:
+            if directory not in self._bio:
+                self._bio[directory] = {key: _load(directory / name) for key, name in BIO_SCALER_FILES.items()}
+            return self._bio[directory]
 
-    def _coerce_numeric(self, df: pd.DataFrame, cols: list) -> pd.DataFrame:
-        """Ép toàn bộ cột sinh học về kiểu số thực (float), biến các ký tự rác thành NaN."""
-        for col in cols:
-            if col not in df.columns:
-                raise ValueError(f"[LỖI] Dữ liệu đầu vào đang thiếu cột đặc trưng: {col}")
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df
+    def geom_artifacts(self, directory: Path, config_id: str) -> Dict[str, Any]:
+        path = directory / geom_scaler_filename(config_id)
+        with self._lock:
+            if path not in self._geom:
+                self._geom[path] = _load(path)
+            return self._geom[path]
 
-    # =========================================================================
-    # NHÁNH 1: XỬ LÝ DỮ LIỆU SINH HỌC (CHẠY 1 LẦN DUY NHẤT)
-    # =========================================================================
-    def fit_transform_bio(self, df: pd.DataFrame, artifacts_dir: str) -> pd.DataFrame:
-        """Luồng Huấn luyện: Học phân phối từ tập Train và lưu file .pkl"""
-        print(f"[*] Đang học phân phối và chuẩn hóa tập Train ({len(df)} variants)...")
-        df_out = df.copy()
-        os.makedirs(artifacts_dir, exist_ok=True)
-        
-        df_out = self._coerce_numeric(
-            df_out, self.bio_freq_cols + self.bio_mean_impute_cols + self.bio_spliceai_cols
-        )
-
-        # 1. Tần số (AF): Điền 0 -> Log10(x + eps) -> StandardScaler
-        df_out[self.bio_freq_cols] = df_out[self.bio_freq_cols].fillna(0.0)
-        df_out[self.bio_freq_cols] = np.log10(df_out[self.bio_freq_cols] + self.epsilon)
-        freq_scaler = StandardScaler()
-        df_out[self.bio_freq_cols] = freq_scaler.fit_transform(df_out[self.bio_freq_cols])
-
-        # 2. Điền khuyết Mean chung cho toàn bộ Phast, Phylo, GERP
-        mean_imputer = SimpleImputer(strategy='mean')
+    def transform_bio(self, df: pd.DataFrame, directory: Path) -> pd.DataFrame:
+        art = self.bio_artifacts(directory)
+        out = _coerce_numeric(df.copy(), BIO_FREQ_COLS + BIO_MEAN_IMPUTE_COLS + BIO_SPLICEAI_COLS)
+        out[BIO_FREQ_COLS] = out[BIO_FREQ_COLS].fillna(0.0)
+        out[BIO_FREQ_COLS] = art["freq_scaler"].transform(np.log10(out[BIO_FREQ_COLS] + self.epsilon))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            df_out[self.bio_mean_impute_cols] = mean_imputer.fit_transform(df_out[self.bio_mean_impute_cols])
+            out[BIO_MEAN_IMPUTE_COLS] = art["mean_imputer"].transform(out[BIO_MEAN_IMPUTE_COLS])
+        out[BIO_PHAST_COLS] = art["phast_scaler"].transform(out[BIO_PHAST_COLS])
+        out[BIO_PHYLO_GERP_COLS] = art["phylo_scaler"].transform(out[BIO_PHYLO_GERP_COLS])
+        out[BIO_SPLICEAI_COLS] = out[BIO_SPLICEAI_COLS].fillna(art["spliceai_fill_values"])
+        out[BIO_SPLICEAI_COLS] = art["spliceai_scaler"].transform(out[BIO_SPLICEAI_COLS])
+        return out
 
-        # Missing lookup records mean the variant is absent from the MANE VCF,
-        # not that it has a zero splice effect. Learn fill values from train only.
-        spliceai_fill_values = df_out[self.bio_spliceai_cols].median().fillna(0.0)
-        df_out[self.bio_spliceai_cols] = df_out[self.bio_spliceai_cols].fillna(spliceai_fill_values)
-        spliceai_scaler = StandardScaler()
-        df_out[self.bio_spliceai_cols] = spliceai_scaler.fit_transform(df_out[self.bio_spliceai_cols])
-
-        # 3. PhastCons: StandardScaler
-        phast_scaler = StandardScaler()
-        df_out[self.bio_phast_cols] = phast_scaler.fit_transform(df_out[self.bio_phast_cols])
-
-        # 4. PhyloP & GERP: QuantileTransformer (Gaussian)
-        phylo_scaler = QuantileTransformer(output_distribution='normal', random_state=42)
-        df_out[self.bio_phylo_gerp_cols] = phylo_scaler.fit_transform(df_out[self.bio_phylo_gerp_cols])
-        
-        # Lưu Artifacts
-        joblib.dump(mean_imputer, f"{artifacts_dir}/bio_mean_imputer.pkl")
-        joblib.dump(freq_scaler, f"{artifacts_dir}/bio_freq_scaler.pkl")
-        joblib.dump(phast_scaler, f"{artifacts_dir}/bio_phast_scaler.pkl")
-        joblib.dump(phylo_scaler, f"{artifacts_dir}/bio_phylo_scaler.pkl")
-        joblib.dump(spliceai_fill_values, f"{artifacts_dir}/bio_spliceai_fill_values.pkl")
-        joblib.dump(spliceai_scaler, f"{artifacts_dir}/bio_spliceai_scaler.pkl")
-        
-        return df_out
-
-    def transform_bio(self, df: pd.DataFrame, artifacts_dir: str) -> pd.DataFrame:
-        """Luồng Đánh giá: Nạp .pkl tĩnh để chuẩn hóa tập Val/Test."""
-        print(f"[*] Đang nạp Artifacts để chuẩn hóa tập Val/Test ({len(df)} variants)...")
-        df_out = df.copy()
-        df_out = self._coerce_numeric(
-            df_out, self.bio_freq_cols + self.bio_mean_impute_cols + self.bio_spliceai_cols
-        )
-        
-        # Tải Artifacts
-        mean_imputer = joblib.load(f"{artifacts_dir}/bio_mean_imputer.pkl")
-        freq_scaler = joblib.load(f"{artifacts_dir}/bio_freq_scaler.pkl")
-        phast_scaler = joblib.load(f"{artifacts_dir}/bio_phast_scaler.pkl")
-        phylo_scaler = joblib.load(f"{artifacts_dir}/bio_phylo_scaler.pkl")
-        spliceai_fill_values = joblib.load(f"{artifacts_dir}/bio_spliceai_fill_values.pkl")
-        spliceai_scaler = joblib.load(f"{artifacts_dir}/bio_spliceai_scaler.pkl")
-        
-        df_out[self.bio_freq_cols] = df_out[self.bio_freq_cols].fillna(0.0)
-        df_out[self.bio_freq_cols] = freq_scaler.transform(np.log10(df_out[self.bio_freq_cols] + self.epsilon))
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            df_out[self.bio_mean_impute_cols] = mean_imputer.transform(df_out[self.bio_mean_impute_cols])
-            
-        df_out[self.bio_phast_cols] = phast_scaler.transform(df_out[self.bio_phast_cols])
-        df_out[self.bio_phylo_gerp_cols] = phylo_scaler.transform(df_out[self.bio_phylo_gerp_cols])
-        df_out[self.bio_spliceai_cols] = df_out[self.bio_spliceai_cols].fillna(spliceai_fill_values)
-        df_out[self.bio_spliceai_cols] = spliceai_scaler.transform(df_out[self.bio_spliceai_cols])
-
-        return df_out
-
-    # =========================================================================
-    # NHÁNH 2: XỬ LÝ DỮ LIỆU HÌNH HỌC (CHẠY THEO TỪNG CẤU HÌNH)
-    # =========================================================================
-    def fit_transform_geom(self, df: pd.DataFrame, artifacts_dir: str, config_name: str) -> pd.DataFrame:
-        df_out = df.copy()
-        os.makedirs(artifacts_dir, exist_ok=True)
-        
-        # [BẢN VÁ] Chốt chặn an toàn: Ép kiểu và xử lý NaN tiềm ẩn từ PyTorch/FAISS
-        all_geom_cols = self.geom_llr_cols + self.geom_lvd_cols + self.geom_lid_cols
-        df_out = self._coerce_numeric(df_out, all_geom_cols)
-        df_out[all_geom_cols] = df_out[all_geom_cols].fillna(0.0)
-        
-        # 1. LLR: StandardScaler
-        llr_scaler = StandardScaler()
-        df_out[self.geom_llr_cols] = llr_scaler.fit_transform(df_out[self.geom_llr_cols])
-        
-        # 2. LVD (L2, Cosine): Log10(x + eps) -> StandardScaler
-        df_out[self.geom_lvd_cols] = np.log10(df_out[self.geom_lvd_cols] + self.epsilon)
-        lvd_scaler = StandardScaler()
-        df_out[self.geom_lvd_cols] = lvd_scaler.fit_transform(df_out[self.geom_lvd_cols])
-        
-        # 3. LID: QuantileTransformer (Gaussian)
-        lid_scaler = QuantileTransformer(output_distribution='normal', random_state=42)
-        df_out[self.geom_lid_cols] = lid_scaler.fit_transform(df_out[self.geom_lid_cols])
-        
-        # Lưu Artifacts
-        joblib.dump(llr_scaler, f"{artifacts_dir}/{config_name}_llr_scaler.pkl")
-        joblib.dump(lvd_scaler, f"{artifacts_dir}/{config_name}_lvd_scaler.pkl")
-        joblib.dump(lid_scaler, f"{artifacts_dir}/{config_name}_lid_scaler.pkl")
-        
-        return df_out
-
-    def transform_geom(self, df: pd.DataFrame, artifacts_dir: str, config_name: str) -> pd.DataFrame:
-        df_out = df.copy()
-        
-        # [BẢN VÁ] Chốt chặn an toàn cho tập Val/Test
-        all_geom_cols = self.geom_llr_cols + self.geom_lvd_cols + self.geom_lid_cols
-        df_out = self._coerce_numeric(df_out, all_geom_cols)
-        df_out[all_geom_cols] = df_out[all_geom_cols].fillna(0.0)
-        
-        llr_scaler = joblib.load(f"{artifacts_dir}/{config_name}_llr_scaler.pkl")
-        lvd_scaler = joblib.load(f"{artifacts_dir}/{config_name}_lvd_scaler.pkl")
-        lid_scaler = joblib.load(f"{artifacts_dir}/{config_name}_lid_scaler.pkl")
-        
-        df_out[self.geom_llr_cols] = llr_scaler.transform(df_out[self.geom_llr_cols])
-        df_out[self.geom_lvd_cols] = lvd_scaler.transform(np.log10(df_out[self.geom_lvd_cols] + self.epsilon))
-        df_out[self.geom_lid_cols] = lid_scaler.transform(df_out[self.geom_lid_cols])
-        
-        return df_out
-
-    def fit_transform_geom_v2(self, df: pd.DataFrame, artifacts_dir: str, config_name: str) -> pd.DataFrame:
-        """Fit a batch-specific geometry normalizer without quantile clipping.
-
-        LID can be far outside the train range for out-of-distribution queries.
-        RobustScaler after log1p preserves that ordering instead of mapping all
-        such values to the same QuantileTransformer boundary.
-        """
-        df_out = df.copy()
-        df_out = self._coerce_numeric(df_out, GEOM_V2_COLUMNS)
-        fill_values = df_out[GEOM_V2_COLUMNS].median().fillna(0.0)
-        df_out[GEOM_V2_COLUMNS] = df_out[GEOM_V2_COLUMNS].fillna(fill_values)
-
-        scalers = {}
+    def transform_geom_v2(self, df: pd.DataFrame, directory: Path, config_id: str) -> pd.DataFrame:
+        art = self.geom_artifacts(directory, config_id)
+        out = _coerce_numeric(df.copy(), GEOM_V2_COLUMNS)
+        out[GEOM_V2_COLUMNS] = out[GEOM_V2_COLUMNS].fillna(art["fill_values"])
         for column in GEOM_V2_COLUMNS:
-            values = df_out[[column]].to_numpy(dtype=np.float64)
+            values = out[[column]].to_numpy(dtype=np.float64)
             if column in GEOM_V2_LOG_COLUMNS:
                 values = np.log1p(np.clip(values, a_min=0.0, a_max=None))
-                scaler = RobustScaler(quantile_range=(5.0, 95.0))
-            else:
-                scaler = StandardScaler()
-            df_out[column] = scaler.fit_transform(values).ravel()
-            scalers[column] = scaler
-
-        os.makedirs(artifacts_dir, exist_ok=True)
-        joblib.dump(
-            {"fill_values": fill_values, "scalers": scalers},
-            f"{artifacts_dir}/{config_name}_geom_v2_scalers.pkl",
-        )
-        return df_out
-
-    def transform_geom_v2(self, df: pd.DataFrame, artifacts_dir: str, config_name: str) -> pd.DataFrame:
-        """Transform validation/test geometry with train-only V2 artifacts."""
-        df_out = df.copy()
-        df_out = self._coerce_numeric(df_out, GEOM_V2_COLUMNS)
-        artifacts = joblib.load(f"{artifacts_dir}/{config_name}_geom_v2_scalers.pkl")
-        fill_values = artifacts["fill_values"]
-        scalers = artifacts["scalers"]
-        df_out[GEOM_V2_COLUMNS] = df_out[GEOM_V2_COLUMNS].fillna(fill_values)
-
-        for column in GEOM_V2_COLUMNS:
-            values = df_out[[column]].to_numpy(dtype=np.float64)
-            if column in GEOM_V2_LOG_COLUMNS:
-                values = np.log1p(np.clip(values, a_min=0.0, a_max=None))
-            df_out[column] = scalers[column].transform(values).ravel()
-        return df_out
+            out[column] = art["scalers"][column].transform(values).ravel()
+        return out

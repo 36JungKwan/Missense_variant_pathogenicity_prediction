@@ -6,6 +6,7 @@ Kiến trúc được suy ra từ chính state_dict nên không cần sửa code
 """
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ from app.core.errors import (
 )
 from app.ml_core.fusion_model import MultiStrategyFusionModel
 from app.services.router_expert_model import RouterExpertCorrection
+
+logger = logging.getLogger("app.services.checkpoint_registry")
 
 VALID_TOGGLE_KEYS = ("111", "110", "101", "011", "100", "010", "001")
 
@@ -243,8 +246,8 @@ class CheckpointRegistry:
 
         model.to(device).eval()
         threshold = float(meta.get("threshold", self._thresholds.get(modalities, 0.5)))
-        print(f"[CheckpointRegistry] Loaded {path.name} as {architecture} for {list(modalities)} "
-              f"(bio={len(bio_cols)}, geom={len(geom_cols)}, threshold={threshold}) on {device}")
+        logger.info("Loaded checkpoint %s as %s for %s (bio=%d, geom=%d, threshold=%s) on %s",
+                    path.name, architecture, list(modalities), len(bio_cols), len(geom_cols), threshold, device)
         return LoadedModel(
             model=model,
             architecture=architecture,

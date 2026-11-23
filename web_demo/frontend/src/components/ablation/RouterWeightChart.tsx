@@ -9,7 +9,7 @@ import {
   Cell,
   LabelList,
 } from 'recharts';
-import { RouterWeights } from '../../types/variant';
+import { RouterWeights } from '@/types';
 
 interface RouterWeightChartProps {
   weights: RouterWeights;

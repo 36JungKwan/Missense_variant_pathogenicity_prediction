@@ -1,4 +1,7 @@
-"""Lỗi nghiệp vụ của pipeline suy luận, ánh xạ thẳng sang HTTP status + error_code."""
+"""Lỗi nghiệp vụ của pipeline suy luận, ánh xạ thẳng sang HTTP status + error_code.
+
+Mọi lỗi API đều có dạng: {"detail": {"error_code": str, "message": str, "request_id": str, ...extra}}.
+"""
 from typing import Any, Dict, Optional
 
 
@@ -19,6 +22,12 @@ class InvalidVariantError(PipelineError):
     """Sai định dạng, không phải SNV, hoặc REF không khớp hệ gen hg38."""
     status_code = 400
     error_code = "INVALID_VARIANT"
+
+
+class InvalidUploadError(PipelineError):
+    """File upload không chứa biến thể hợp lệ nào."""
+    status_code = 400
+    error_code = "INVALID_UPLOAD"
 
 
 class NoModalitySelectedError(PipelineError):
@@ -43,9 +52,15 @@ class CheckpointIncompatibleError(PipelineError):
 
 
 class FeatureArtifactMissingError(PipelineError):
-    """Thiếu scaler / tài nguyên cần để tạo đặc trưng đúng như lúc huấn luyện."""
+    """Thiếu scaler / FASTA / tài nguyên cần để tạo đặc trưng đúng như lúc huấn luyện."""
     status_code = 503
     error_code = "FEATURE_ARTIFACT_MISSING"
+
+
+class FoundationModelUnavailableError(PipelineError):
+    """Không nạp được NT-v1 / ESM2 (sai model id, thiếu trọng số trong HF_HOME, hết VRAM...)."""
+    status_code = 503
+    error_code = "FOUNDATION_MODEL_UNAVAILABLE"
 
 
 class VepUnavailableError(PipelineError):
@@ -70,3 +85,7 @@ class NonMissenseVariantError(PipelineError):
             variant_id=variant_id,
             detected_consequence=detected_consequence,
         )
+
+
+def error_body(error_code: str, message: str, request_id: str, **extra: Any) -> Dict[str, Any]:
+    return {"detail": {"error_code": error_code, "message": message, "request_id": request_id, **extra}}
