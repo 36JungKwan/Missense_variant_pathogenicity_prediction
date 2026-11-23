@@ -1,0 +1,21 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: rbnet_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rbnet_user
+      POSTGRES_PASSWORD: rbnet_secret_password
+      POSTGRES_DB: rbnet_genomics
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rbnet_user -d rbnet_genomics"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
