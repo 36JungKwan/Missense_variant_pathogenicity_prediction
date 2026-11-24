@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "cache_root": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+  "models": {
+    "nt_v1_500m_dna_1001": {
+      "train1": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train1",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train1\\manifest.json",
+        "n_samples": 104385,
+        "n_shards": 3263,
+        "hidden_size": 1280,
+        "storage_bytes": 92123474064,
+        "estimated_storage_bytes": 99279654912,
+        "elapsed_seconds": 1001.9370502000002
+      },
+      "train2": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train2",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train2\\manifest.json",
+        "n_samples": 67990,
+        "n_shards": 2125,
+        "hidden_size": 1280,
+        "storage_bytes": 60003590896,
+        "estimated_storage_bytes": 64664690688,
+        "elapsed_seconds": 665.9771634000008
+      }
+    },
+    "esm1b_650m_prot_501": {
+      "train1": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train1",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train1\\manifest.json",
+        "n_samples": 104385,
+        "n_shards": 6525,
+        "hidden_size": 1280,
+        "storage_bytes": 269386556400,
+        "estimated_storage_bytes": 290335269888,
+        "elapsed_seconds": 3434.0000936999995
+      },
+      "train2": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train2",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train2\\manifest.json",
+        "n_samples": 67990,
+        "n_shards": 4250,
+        "hidden_size": 1280,
+        "storage_bytes": 175461892192,
+        "estimated_storage_bytes": 189106624512,
+        "elapsed_seconds": 2183.7582490000004
+      }
+    }
+  },
+  "updated_at": "2026-11-24T19:54:08.230166+00:00",
+  "index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\training_dataset_ablation_20261125_005218\\module06_architecture_experiments\\token_embedding_cache_index.json"
+}

@@ -70,6 +70,66 @@ class _TokenOnlyPlaceholderDataset(Dataset):
         return sample
 
 
+class _VariantSubsetDataset(Dataset):
+    """Expose a deterministic Variant_ID subset while preserving dataset metadata."""
+
+    def __init__(self, base_dataset, indices):
+        self.base_dataset = base_dataset
+        self.indices = np.asarray(indices, dtype=np.int64)
+        if self.indices.ndim != 1 or len(self.indices) == 0:
+            raise ValueError("A training subset must contain at least one row.")
+        self.df = base_dataset.df.iloc[self.indices].reset_index(drop=True)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getattr__(self, name):
+        if name in {"base_dataset", "indices", "df"}:
+            raise AttributeError(name)
+        return getattr(self.base_dataset, name)
+
+    def __getitem__(self, index):
+        return self.base_dataset[int(self.indices[index])]
+
+
+def _subset_training_loader(loader, selected_variant_ids, seed):
+    """Restrict a loader to saved Variant_IDs without rewriting source parquets."""
+    if selected_variant_ids is None:
+        return loader
+    requested = [str(value) for value in selected_variant_ids]
+    if len(requested) != len(set(requested)):
+        raise ValueError("training_sample_ids contains duplicate Variant_ID values.")
+    source_ids = loader.dataset.df["Variant_ID"].astype(str)
+    index_by_id = {variant_id: index for index, variant_id in enumerate(source_ids)}
+    missing = [value for value in requested if value not in index_by_id]
+    if missing:
+        raise KeyError(
+            f"Training subset has {len(missing)} Variant_IDs absent from the loaded split; "
+            f"examples: {missing[:5]}"
+        )
+    # Keep source-parquet order stable; DataLoader shuffling remains seed-controlled.
+    selected_set = set(requested)
+    indices = [
+        index for index, variant_id in enumerate(source_ids)
+        if variant_id in selected_set
+    ]
+    if len(indices) != len(requested):
+        raise RuntimeError(
+            f"Training subset resolved to {len(indices)} rows, expected {len(requested)}."
+        )
+    dataset = _VariantSubsetDataset(loader.dataset, indices)
+    generator = loader.generator if loader.generator is not None else torch.Generator()
+    generator.manual_seed(int(seed))
+    return DataLoader(
+        dataset,
+        batch_size=loader.batch_size,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=loader.pin_memory,
+        generator=generator,
+    )
+
+
 def _architecture_loader(
     pipeline, context, target, split_name, pooling, dna_model, protein_model,
     is_train, geometry_context, seed, embedding_representation,
@@ -346,6 +406,8 @@ def run_architecture_experiment(
     datasets = context["datasets"]
     dna_model = context["DNA_MODEL"]
     protein_model = context["PROTEIN_MODEL"]
+    training_split = str(context.get("training_split", "train3"))
+    geometry_context = str(context.get("geometry_context", training_split))
     device = torch.device(context.get("DEVICE", pipeline.device))
     config = dict(experiment_config)
     display = display_fn or print
@@ -385,6 +447,9 @@ def run_architecture_experiment(
         "pipeline_config": pipeline.config,
         "target_configs": targets,
         "datasets": datasets,
+        "training_split": training_split,
+        "geometry_context": geometry_context,
+        "training_subset_signature": context.get("training_subset_signature"),
         "dna_model": dna_model,
         "protein_model": protein_model,
         "pooling": "center",
@@ -487,11 +552,16 @@ def run_architecture_experiment(
         loader_start = time.perf_counter()
         print(f"[{architecture}] Preparing train dataset and token-cache loader...")
         train_loader = _architecture_loader(
-            pipeline, context, target, "train3", "center", dna_model, protein_model,
-            True, "train3", int(config["seed"]), embedding_representation,
+            pipeline, context, target, training_split, "center", dna_model, protein_model,
+            True, geometry_context, int(config["seed"]), embedding_representation,
+        )
+        train_loader = _subset_training_loader(
+            train_loader,
+            context.get("training_sample_ids"),
+            int(config["seed"]),
         )
         train_loader = _attach_token_cache(
-            train_loader, context, "train3", is_train=True,
+            train_loader, context, training_split, is_train=True,
             window_radius=None if reuse_completed_model else window_radius,
         )
         print(
@@ -503,7 +573,7 @@ def run_architecture_experiment(
             print(f"[{architecture}] Preparing validation dataset and token-cache loader...")
             val_loader = _architecture_loader(
                 pipeline, context, target, "val", "center", dna_model, protein_model,
-                False, "train3", int(config["seed"]), embedding_representation,
+                False, geometry_context, int(config["seed"]), embedding_representation,
             )
             val_loader = _attach_token_cache(val_loader, context, "val", window_radius=window_radius)
             print(
@@ -859,7 +929,7 @@ def run_architecture_experiment(
                 print(f"[{architecture}] Evaluating test set: {target_name} / {dataset_name}")
                 test_loader = _architecture_loader(
                     pipeline, context, target, dataset_cfg["test"], "center", dna_model,
-                    protein_model, False, dataset_cfg["train"], int(config["seed"]),
+                    protein_model, False, geometry_context, int(config["seed"]),
                     embedding_representation,
                 )
                 test_loader = _attach_token_cache(

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "cache_root": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06",
+  "models": {
+    "nt_v1_500m_dna_1001": {
+      "train1": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train1",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train1\\manifest.json",
+        "n_samples": 104385,
+        "n_shards": 3263,
+        "hidden_size": 1280,
+        "storage_bytes": 92123474064
+      },
+      "train2": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train2",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\nt_v1_500m_dna_1001\\train2\\manifest.json",
+        "n_samples": 67990,
+        "n_shards": 2125,
+        "hidden_size": 1280,
+        "storage_bytes": 60003590896
+      }
+    },
+    "esm1b_650m_prot_501": {
+      "train1": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train1",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train1\\manifest.json",
+        "n_samples": 104385,
+        "n_shards": 6525,
+        "hidden_size": 1280,
+        "storage_bytes": 269386556400
+      },
+      "train2": {
+        "status": "complete",
+        "path": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train2",
+        "manifest": "F:\\variant_data\\fm_embeddings\\token_level_cache\\module06\\esm1b_650m_prot_501\\train2\\manifest.json",
+        "n_samples": 67990,
+        "n_shards": 4250,
+        "hidden_size": 1280,
+        "storage_bytes": 175461892192
+      }
+    }
+  },
+  "index_path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\training_dataset_ablation_20261125_005218\\module06_architecture_experiments\\fm_ablation_token_cache_index.json"
+}

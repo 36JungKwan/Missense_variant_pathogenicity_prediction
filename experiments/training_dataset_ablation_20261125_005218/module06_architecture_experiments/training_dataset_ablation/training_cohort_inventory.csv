@@ -1,0 +1,6 @@
+Training_Cohort,Training_Split,Sampling_Mode,Training_N,Benign_N,Pathogenic_N,Benign_Pct,Pathogenic_Pct,Source_N,Status
+Train1 full,train1,full_dataset,104385,79652,24733,0.7630598266034392,0.23694017339656082,104385,train
+Train1 stratified to Train3 N,train1,stratified_downsample_to_train3_count,23208,17709,5499,0.7630558428128231,0.23694415718717685,104385,train
+Train2 full,train2,full_dataset,67990,44162,23828,0.6495366965730255,0.35046330342697457,67990,train
+Train2 stratified to Train3 N,train2,stratified_downsample_to_train3_count,23208,15074,8134,0.6495174077904171,0.3504825922095829,67990,train
+Train3 full (Notebook 17 reference),train3,existing_reference_no_rerun,23208,11604,11604,0.5,0.5,23208,reuse_notebook17

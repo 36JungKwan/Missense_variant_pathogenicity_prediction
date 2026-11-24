@@ -1,0 +1,6 @@
+Training_Cohort,Completed_Seed_Dataset_Rows,Seeds,Test_Datasets
+train1_equal_train3,20,5,4
+train1_full,20,5,4
+train2_equal_train3,20,5,4
+train2_full,20,5,4
+train3_reference,20,5,4

@@ -1,0 +1,30 @@
+{
+  "downsample_random_state": 20261125,
+  "equal_sample_target": 23208,
+  "sample_id_files": {
+    "train1": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\training_dataset_ablation_20261125_005218\\module06_architecture_experiments\\training_dataset_ablation\\sample_ids_train1_equal_train3.json",
+    "train2": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\training_dataset_ablation_20261125_005218\\module06_architecture_experiments\\training_dataset_ablation\\sample_ids_train2_equal_train3.json"
+  },
+  "schema_version": 1,
+  "source_files": {
+    "train1": {
+      "mtime_ns": 1790407647694602800,
+      "path": "F:\\variant_data\\processed_parquet\\train1_normalized.parquet",
+      "size_bytes": 888639599
+    },
+    "train2": {
+      "mtime_ns": 1790407652577068000,
+      "path": "F:\\variant_data\\processed_parquet\\train2_normalized.parquet",
+      "size_bytes": 509782046
+    },
+    "train3": {
+      "mtime_ns": 1790407654530019600,
+      "path": "F:\\variant_data\\processed_parquet\\train3_normalized.parquet",
+      "size_bytes": 241685991
+    }
+  },
+  "train3_reference_class_counts": {
+    "0": 11604,
+    "1": 11604
+  }
+}

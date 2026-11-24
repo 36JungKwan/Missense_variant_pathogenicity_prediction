@@ -1,0 +1,156 @@
+{
+  "config": {
+    "architecture": "CrossAttention_ThreeModalities",
+    "cohorts": [
+      {
+        "display_name": "Train1 full",
+        "key": "train1_full",
+        "sample_signature": "d7bd89a9bf598874d62c61abf33a62acb26045b10130683c080f53f793e263b8",
+        "sampling_mode": "full_dataset",
+        "source_class_counts": {
+          "0": 79652,
+          "1": 24733
+        },
+        "training_class_counts": {
+          "0": 79652,
+          "1": 24733
+        },
+        "training_sample_count": 104385,
+        "training_split": "train1"
+      },
+      {
+        "display_name": "Train1 stratified to Train3 N",
+        "key": "train1_equal_train3",
+        "sample_signature": "52cbd6b7002e654749ef7179167aa894f7dbcf408e0e0630feca20ef214dcb78",
+        "sampling_mode": "stratified_downsample_to_train3_count",
+        "source_class_counts": {
+          "0": 79652,
+          "1": 24733
+        },
+        "training_class_counts": {
+          "0": 17709,
+          "1": 5499
+        },
+        "training_sample_count": 23208,
+        "training_split": "train1"
+      },
+      {
+        "display_name": "Train2 full",
+        "key": "train2_full",
+        "sample_signature": "6d7d54a4e1fb293aeac9c525ed76ae6b97f87a225dd2463cea76847ccf728a9f",
+        "sampling_mode": "full_dataset",
+        "source_class_counts": {
+          "0": 44162,
+          "1": 23828
+        },
+        "training_class_counts": {
+          "0": 44162,
+          "1": 23828
+        },
+        "training_sample_count": 67990,
+        "training_split": "train2"
+      },
+      {
+        "display_name": "Train2 stratified to Train3 N",
+        "key": "train2_equal_train3",
+        "sample_signature": "af8d56752edb4b13caa96e3ccfb6b010b7aae811f4367dc9f6fbcaca5e66de75",
+        "sampling_mode": "stratified_downsample_to_train3_count",
+        "source_class_counts": {
+          "0": 44162,
+          "1": 23828
+        },
+        "training_class_counts": {
+          "0": 15074,
+          "1": 8134
+        },
+        "training_sample_count": 23208,
+        "training_split": "train2"
+      }
+    ],
+    "dna_model": {
+      "alt_col": "alt_seq_1001",
+      "batch_size": 32,
+      "model_id": "InstaDeepAI/nucleotide-transformer-500m-human-ref",
+      "model_type": "mlm",
+      "name": "nt_v1_500m_dna_1001",
+      "ref_col": "ref_seq_1001",
+      "seq_type": "dna",
+      "sequence_length": 1001
+    },
+    "embedding_representation": "ref_alt_concat",
+    "fixed_model_config": {
+      "attention_dropout": 0.18776012701077605,
+      "batch_size": 64,
+      "dropout": 0.1955626033738947,
+      "early_stop_patience": 6,
+      "feature_dropout": 0.2507543060224074,
+      "ffn_multiplier": 4,
+      "k_radius": 16,
+      "learning_rate": 0.00012206472463506827,
+      "lr_factor": 0.5,
+      "lr_patience": 3,
+      "max_epochs": 30,
+      "model_dim": 512,
+      "num_heads": 8,
+      "num_layers": 3,
+      "pooling": "mean",
+      "weight_decay": 3.380881049679085e-06
+    },
+    "geometry_root": "geometry_v2_k64_step2_matched",
+    "protein_model": {
+      "alt_col": "prot_alt_seq_501",
+      "batch_size": 16,
+      "model_id": "facebook/esm1b_t33_650M_UR50S",
+      "model_type": "mlm",
+      "name": "esm1b_650m_prot_501",
+      "ref_col": "prot_ref_seq_501",
+      "seq_type": "protein",
+      "sequence_length": 501
+    },
+    "seeds": [
+      5,
+      6,
+      7,
+      37,
+      42
+    ],
+    "target_configs": [
+      {
+        "ablation": "bio_core_dna_prot_spliceai_geom",
+        "active_modalities": [
+          "dna",
+          "prot",
+          "bio_core",
+          "spliceai",
+          "geom"
+        ],
+        "geom_feature_names": [
+          "dna_LVD_L2",
+          "dna_LVD_Cosine",
+          "dna_LID",
+          "dna_LVD_Relative",
+          "prot_LVD_L2",
+          "prot_LVD_Cosine",
+          "prot_LID",
+          "prot_LVD_Relative"
+        ],
+        "geometry_dna_name": "nt_v1_500m_dna_1001",
+        "geometry_protein_name": "esm1b_650m_prot_501",
+        "geometry_root": "geometry_v2_k64_step2_matched",
+        "name": "B_with_geometry"
+      }
+    ],
+    "test_splits": [
+      "test",
+      "clinvarhq",
+      "proteingym",
+      "uniprot"
+    ],
+    "train3_reference_source": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fusion_classifier_benchmark_20261120_192605",
+    "validation_split": "val",
+    "variant": "ref_alt_concat_variant_centered_window_k16"
+  },
+  "config_sha256": "9fb2e3d65a3cf4e0363346d1655106cd59d01388b76237a0c064a690cd0d8e57",
+  "stage": "module06_training_dataset_ablation",
+  "version": 1
+}
