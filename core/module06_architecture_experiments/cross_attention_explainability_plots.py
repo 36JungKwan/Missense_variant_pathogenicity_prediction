@@ -593,15 +593,19 @@ def _attention_context_heatmap(attention, *, dataset, seed, output_dir):
     needed = {"Query_Modality", "Context_Modality", "Mean_Attention_Over_Heads"}
     if not needed.issubset(part.columns):
         return
-    summary = part.groupby(["True_Label", "Query_Modality", "Context_Modality"], dropna=False)[
-        "Mean_Attention_Over_Heads"
-    ].mean().reset_index()
+    per_query_mass = part.groupby(
+        ["Variant_ID", "True_Label", "Layer", "Query_Modality", "Context_Modality", "Query_Token"],
+        dropna=False,
+    )["Mean_Attention_Over_Heads"].sum().rename("Context_Mass").reset_index()
+    summary = per_query_mass.groupby(
+        ["True_Label", "Query_Modality", "Context_Modality"], dropna=False
+    )["Context_Mass"].mean().reset_index()
     labels = sorted(summary["True_Label"].dropna().unique())
     fig, axes = plt.subplots(1, max(1, len(labels)), figsize=(6 * max(1, len(labels)), 5), squeeze=False)
     image = None
     for ax, true_label in zip(axes.flat, labels):
         table = summary[summary["True_Label"].eq(true_label)].pivot(
-            index="Query_Modality", columns="Context_Modality", values="Mean_Attention_Over_Heads"
+            index="Query_Modality", columns="Context_Modality", values="Context_Mass"
         )
         image = ax.imshow(table.to_numpy(float), cmap="magma", aspect="auto")
         ax.set_xticks(range(len(table.columns)), table.columns, rotation=30, ha="right")
@@ -611,7 +615,7 @@ def _attention_context_heatmap(attention, *, dataset, seed, output_dir):
         ax.set_ylabel("Query modality")
     if image is not None:
         fig.colorbar(image, ax=list(axes.flat), label="Mean attention weight")
-    fig.suptitle(f"Attention routing by modality | {dataset} | seed {seed}\nRouting weights describe information flow, not signed effect on prediction.")
+    fig.suptitle(f"Mean attention mass by query → context modality | {dataset} | seed {seed}\nMass sums key weights within each context per query before averaging. It describes information flow, not signed effect on prediction.")
     fig.tight_layout()
     fig.savefig(output_dir / f"attention_modality_routing_{dataset}_seed{seed}.png", dpi=160, bbox_inches="tight")
     plt.close(fig)
