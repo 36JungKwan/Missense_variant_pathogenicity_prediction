@@ -1,0 +1,134 @@
+{
+  "source_batch": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149",
+  "source_checkpoints": {
+    "5": {
+      "path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed5\\checkpoints\\B_with_geometry\\best_model.pth",
+      "size": 133149051,
+      "mtime_ns": 1795159388901016200,
+      "best_epoch": 2,
+      "validation_mcc": 0.8209,
+      "decision_threshold": 0.8882123827934265
+    },
+    "6": {
+      "path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed6\\checkpoints\\B_with_geometry\\best_model.pth",
+      "size": 133149051,
+      "mtime_ns": 1795160067636161700,
+      "best_epoch": 4,
+      "validation_mcc": 0.8238,
+      "decision_threshold": 0.918220579624176
+    },
+    "7": {
+      "path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed7\\checkpoints\\B_with_geometry\\best_model.pth",
+      "size": 133149051,
+      "mtime_ns": 1795121110733416800,
+      "best_epoch": 2,
+      "validation_mcc": 0.8235,
+      "decision_threshold": 0.559535801410675
+    },
+    "37": {
+      "path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed37\\checkpoints\\B_with_geometry\\best_model.pth",
+      "size": 133149051,
+      "mtime_ns": 1795121279492007900,
+      "best_epoch": 2,
+      "validation_mcc": 0.8243,
+      "decision_threshold": 0.4791317582130432
+    },
+    "42": {
+      "path": "D:\\Missense_variant_pathogenicity_prediction\\experiments\\fm_ablation_20261117_003149\\module06_architecture_experiments\\step2_sequence_length_ablation\\runs\\step2_nt_v1_dna1001_esm1b_prot501_seed42\\checkpoints\\B_with_geometry\\best_model.pth",
+      "size": 133149051,
+      "mtime_ns": 1795159389298229000,
+      "best_epoch": 2,
+      "validation_mcc": 0.821,
+      "decision_threshold": 0.8142455220222473
+    }
+  },
+  "seeds": [
+    5,
+    6,
+    7,
+    37,
+    42
+  ],
+  "datasets": {
+    "test": "Train3Val_Test",
+    "clinvarhq": "Train3Val_ClinVarHQ",
+    "proteingym": "Train3Val_ProteinGym"
+  },
+  "model_config": {
+    "attention_dropout": 0.18776012701077605,
+    "dropout": 0.1955626033738947,
+    "early_stop_patience": 6,
+    "feature_dropout": 0.2507543060224074,
+    "ffn_multiplier": 4,
+    "k_radius": 16,
+    "learning_rate": 0.00012206472463506827,
+    "lr_factor": 0.5,
+    "lr_patience": 3,
+    "max_epochs": 30,
+    "model_dim": 512,
+    "num_heads": 8,
+    "num_layers": 3,
+    "pooling": "mean",
+    "weight_decay": 3.380881049679085e-06
+  },
+  "bio_feature_names": [
+    "AF",
+    "gnomADe_AF",
+    "phyloP100way_vertebrate",
+    "phyloP470way_mammalian",
+    "phyloP17way_primate",
+    "phastCons100way_vertebrate",
+    "phastCons470way_mammalian",
+    "phastCons17way_primate",
+    "GERP++_RS",
+    "GERP++_NR",
+    "GERP_92_mammals",
+    "SpliceAI_pred_DS_AG",
+    "SpliceAI_pred_DS_AL",
+    "SpliceAI_pred_DS_DG",
+    "SpliceAI_pred_DS_DL",
+    "SpliceAI_pred_DP_AG",
+    "SpliceAI_pred_DP_AL",
+    "SpliceAI_pred_DP_DG",
+    "SpliceAI_pred_DP_DL",
+    "SpliceAI_pred_DS_max"
+  ],
+  "geometry_feature_names": [
+    "dna_LVD_L2",
+    "dna_LVD_Cosine",
+    "dna_LID",
+    "dna_LVD_Relative",
+    "prot_LVD_L2",
+    "prot_LVD_Cosine",
+    "prot_LID",
+    "prot_LVD_Relative"
+  ],
+  "sample_manifest_sha256": "1efc47b6596c96ad8b4d5325cb2ca363fa86942722f3956eb6ebeb7eabc0b81a",
+  "attention_manifest_sha256": "750324dfd2bbec574cc79f8a67a553bf2e0a04919c03886aa8f2b3c55a438ea5",
+  "sensitivity_manifest_sha256": "eef50f64a27db9f74d0025b4468638e9ca30fb65bc5408331b926cf2cc4150eb",
+  "samples_per_label_af_stratum": 25,
+  "attention_samples_per_label": 24,
+  "sensitivity_samples_per_label": 10,
+  "background_samples": 256,
+  "background_seeds": [
+    2026,
+    2027,
+    2028
+  ],
+  "ig_steps": 64,
+  "ig_retry_steps": 128,
+  "ig_internal_batch_size": 8,
+  "ig_chunk_size": 5,
+  "sensitivity_chunk_size": 4,
+  "occlusion_chunk_size": 16,
+  "attention_chunk_size": 4,
+  "batch_size": 64,
+  "expected_test_mcc": {
+    "5": 0.8381,
+    "6": 0.8316,
+    "7": 0.8395,
+    "37": 0.8424,
+    "42": 0.8345
+  },
+  "mcc_reference_tolerance": 0.002
+}

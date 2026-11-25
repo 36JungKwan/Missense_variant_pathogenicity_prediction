@@ -1,0 +1,26 @@
+{
+  "base_run_signature_sha256": "edf2a9a50fd13b7a71d8b82e5ab5b487225122db7a108148ca1ea1017a57b49f",
+  "explainer_names": [
+    "ExactExplainer",
+    "GradientExplainer",
+    "DeepExplainer"
+  ],
+  "shap_version": "0.51.0",
+  "samples_per_label_per_dataset": 5,
+  "sample_manifest_sha256": "c0199afa7d62e529d671f23c29341b0dd655a0194b76292b2299e1ed9cf41413",
+  "background_samples": 32,
+  "background_seed": 2030,
+  "background_manifest_sha256": "43e39f1d000f2a4b8074dedbd2229c3b4411b78e52f8a01134db21f6c54be525",
+  "gradient_nsamples": 128,
+  "gradient_batch_size": 16,
+  "chunk_size": 4,
+  "deep_additivity_fallback": true,
+  "exact_groups": [
+    "DNA",
+    "Protein",
+    "Bio_SpliceAI",
+    "Geometry"
+  ],
+  "exact_baseline": "train3_background_mean_tokens_and_median_features_seed_2026",
+  "output": "pathogenic_logit_before_sigmoid"
+}

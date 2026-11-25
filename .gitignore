@@ -12,6 +12,7 @@
 *.pkl
 *.npz
 *.npy
+*.parquet
 /experiments/cross_attention_ablation_20261121_155305/module06_architecture_experiments/pure_ml_ref_alt_concat_window33_gpu_first_pca16_nopca8/feature_matrix_cache/
 # Generated text reports and metadata inside batch-run output folders only.
 /experiments/optimization_fixed_config_*/*.txt

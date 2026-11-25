@@ -1,0 +1,7 @@
+Explainer,Dataset,Seed,Variant_ID,True_Label,Case_Selection,Base_Logit,Model_Logit,Pathogenic_Probability,Decision_Threshold,Predicted_Label,Relative_Additivity_Residual
+Exact,Train3Val_Test,42,15_89673353_C_A,0,nearest median probability within true class,2.3822438716888428,-2.571084260940552,0.07102273288673906,0.8142455220222473,0,
+Exact,Train3Val_Test,42,15_42360050_C_T,1,nearest median probability within true class,2.3822438716888428,2.398698091506958,0.9167279725851946,0.8142455220222473,1,
+Gradient,Train3Val_Test,42,15_89673353_C_A,0,nearest median probability within true class,-0.3358832597732544,-2.571084260940552,0.07102273288673906,0.8142455220222473,0,0.3134886114699957
+Gradient,Train3Val_Test,42,15_42360050_C_T,1,nearest median probability within true class,-0.3358832597732544,2.398698091506958,0.9167279725851946,0.8142455220222473,1,0.0406729821370989
+Deep,Train3Val_Test,42,15_89673353_C_A,0,nearest median probability within true class,-0.3358832597732544,-2.571084260940552,0.07102273288673906,0.8142455220222473,0,0.7285617105928062
+Deep,Train3Val_Test,42,15_42360050_C_T,1,nearest median probability within true class,-0.3358832597732544,2.398698091506958,0.9167279725851946,0.8142455220222473,1,0.8274443574662226
