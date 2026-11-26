@@ -250,15 +250,18 @@ def fig_internal_benchmark():
             strat.append(cur)
         for b, bn in enumerate(BENCH3):
             rec[(cur, r[1], bn, "MCC")] = num(r[2 + 3 * b])
+            rec[(cur, r[1], bn, "AUPRC")] = num(r[3 + 3 * b])
             rec[(cur, r[1], bn, "AUROC")] = num(r[4 + 3 * b])
     for i, r in enumerate(pm):
         bn = BENCH3[i // 3]
         rec[("Pure ML", r[0], bn, "MCC")] = num(r[2])
+        rec[("Pure ML", r[0], bn, "AUPRC")] = num(r[5])
         rec[("Pure ML", r[0], bn, "AUROC")] = num(r[6])
     strat.append("Pure ML")
     y0 = np.arange(len(strat))[::-1]
-    fig, axes = plt.subplots(2, 3, figsize=(WIDTH, 5.6), sharey=True, constrained_layout=True)
-    for i, met in enumerate(("MCC", "AUROC")):
+    mets = ("MCC", "AUROC", "AUPRC")
+    fig, axes = plt.subplots(3, 3, figsize=(WIDTH, 7.9), sharey=True, constrained_layout=True)
+    for i, met in enumerate(mets):
         for j, bn in enumerate(BENCH3):
             ax = axes[i, j]
             for k, (c, (colr, mk)) in enumerate(CLF.items()):
@@ -276,7 +279,8 @@ def fig_internal_benchmark():
             if i == 0:
                 ax.set_title(bn, fontsize=9)
             ax.set_xlabel(met, fontsize=8.5)
-    axes[0, 0].set_yticks(y0, strat)
+    for i in range(len(mets)):
+        axes[i, 0].set_yticks(y0, strat)
     h, l = axes[0, 0].get_legend_handles_labels()
     fig.legend(h, l, loc="outside upper right", ncol=4, handlelength=1.0, title="Classifier", title_fontsize=8.5,
                alignment="left")
@@ -296,13 +300,16 @@ def fig_sota():
     y = np.arange(len(names))[::-1]
     fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 5.0), sharey=True, constrained_layout=True)
     for j, (ax, bn) in enumerate(zip(axes, BENCH3)):
-        mcc, auc = v[:, 5 * j], v[:, 5 * j + 4]
-        ax.hlines(y, mcc, auc, color=GRID, lw=1.2, zorder=1)
+        mcc, prc, auc = v[:, 5 * j], v[:, 5 * j + 3], v[:, 5 * j + 4]
+        lo, hi = np.minimum.reduce([mcc, prc, auc]), np.maximum.reduce([mcc, prc, auc])
+        ax.hlines(y, lo, hi, color=GRID, lw=1.2, zorder=1)
         ax.errorbar(mcc, y, xerr=np.nan_to_num(s[:, 5 * j]), fmt="o", ms=4, color=BLUE, mec="white", mew=.4,
                     elinewidth=.7, label="MCC", zorder=3)
         ax.plot(auc, y, "D", ms=3.6, mfc="white", mec=ORANGE, mew=1.0, label="AUROC", zorder=3)
+        ax.plot(prc, y, "^", ms=3.9, mfc="white", mec=GREEN, mew=1.0, label="AUPRC", zorder=3)
         ax.plot(mcc[0], y[0], "o", ms=5.5, color=INK, zorder=4)
         ax.plot(auc[0], y[0], "D", ms=4.4, mfc="white", mec=INK, mew=1.2, zorder=4)
+        ax.plot(prc[0], y[0], "^", ms=4.7, mfc="white", mec=INK, mew=1.2, zorder=4)
         ax.set_title(bn, fontsize=9)
         ax.set_xlim(0.3, 1.0)
         _hgrid(ax)
@@ -310,34 +317,40 @@ def fig_sota():
     axes[0].get_yticklabels()[0].set_fontweight("bold")
     fig.supxlabel("Score", fontsize=9)
     h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="outside upper right", ncol=2, handlelength=1.0)
+    fig.legend(h, l, loc="outside upper right", ncol=3, handlelength=1.0)
     save(fig, "fig_sota")
 
 
 def fig_sota_threshold():
     names, v, _ = _sota()
-    fig, (ax, bx) = plt.subplots(1, 2, figsize=(WIDTH, 2.9), constrained_layout=True)
+    fig = plt.figure(figsize=(WIDTH, 5.6), constrained_layout=True)
+    gs = fig.add_gridspec(2, 4)
+    ax, bx, cx = fig.add_subplot(gs[0, 0:2]), fig.add_subplot(gs[0, 2:4]), fig.add_subplot(gs[1, 1:3])
     lab = {"TriMVPP", "REVEL", "gMVP", "popEVE", "CADD", "DANN", "M-CAP", "MPC", "PrimateAI"}
     off = {"TriMVPP": (-6, 9, "right"), "REVEL": (-5, 3, "right"),
            "gMVP": (4, 0, "left"), "popEVE": (4, -2, "left"), "CADD": (-4, 2, "right"), "DANN": (4, 0, "left"),
            "M-CAP": (4, 0, "left"), "MPC": (4, -3, "left"), "PrimateAI": (4, 2, "left")}
-    for a, (xi, yi, xl, yl) in ((ax, (4, 0, "AUROC", "MCC")), (bx, (1, 2, "Accuracy", "F1"))):
+    off_prc = dict(off, gMVP=(-2, -10, "right"), REVEL=(-5, 4, "right"), **{"M-CAP": (4, -2, "left")},
+                   popEVE=(4, 2, "left"), PrimateAI=(-4, 2, "right"), MPC=(4, -2, "left"))
+    for a, (xi, yi, xl, yl), o in ((ax, (4, 0, "AUROC", "MCC"), off), (bx, (3, 0, "AUPRC", "MCC"), off_prc),
+                                   (cx, (1, 2, "Accuracy", "F1"), off)):
         x, yv = v[:, xi], v[:, yi]
         a.scatter(x[1:], yv[1:], s=16, color=BLUE, edgecolor="white", linewidth=.5, zorder=3)
         a.scatter(x[:1], yv[:1], s=26, color=INK, zorder=4)
         for n, xx, yy in zip(names, x, yv):
             if n in lab:
-                dx, dy, ha = off[n]
+                dx, dy, ha = o[n]
                 a.annotate(n, (xx, yy), xytext=(dx, dy), textcoords="offset points", fontsize=7, ha=ha, va="center")
         a.set_xlabel(xl)
         a.set_ylabel(yl)
         a.grid(color=GRID, lw=.6)
         a.set_axisbelow(True)
     allbenign = 4437 / 6095
-    bx.axvline(allbenign, color=MUTED, lw=.8, ls=(0, (3, 2)))
-    bx.text(allbenign + 0.004, 0.36, "All benign", fontsize=7, color=MUTED, rotation=90, va="bottom")
-    ax.set_title("(a) Ranking and decision quality", loc="left", fontsize=9)
-    bx.set_title("(b) Accuracy and F1", loc="left", fontsize=9)
+    cx.axvline(allbenign, color=MUTED, lw=.8, ls=(0, (3, 2)))
+    cx.text(allbenign + 0.004, 0.36, "All benign", fontsize=7, color=MUTED, rotation=90, va="bottom")
+    ax.set_title("(a) AUROC and MCC", loc="left", fontsize=9)
+    bx.set_title("(b) AUPRC and MCC", loc="left", fontsize=9)
+    cx.set_title("(c) Accuracy and F1", loc="left", fontsize=9)
     save(fig, "fig_sota_threshold")
 
 
@@ -380,21 +393,23 @@ def fig_af_intervention():
         cur = r[0] or cur
         rec[(cur, r[1])] = [num(c) if c != "-" else (np.nan, np.nan) for c in r[2:6]]
     sc = [("Observed", "Observed AF", BLUE), ("AF = median", "AF = training median", ORANGE), ("AF = 0", "AF = 0", GRAY)]
-    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 2.5), constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(WIDTH, 4.6), constrained_layout=True)
+    axes = axes.ravel()
     x, w = np.arange(3), 0.26
-    for ax, (mi, ml) in zip(axes, ((0, "MCC"), (1, "AUROC"), (3, "Flip rate"))):
+    for ax, (mi, ml) in zip(axes, ((0, "(a) MCC"), (1, "(b) AUROC"), (2, "(c) AUPRC"), (3, "(d) Flip rate"))):
         for k, (key, lab_, col) in enumerate(sc):
             m = [rec[(bn, key)][mi][0] for bn in BENCH3]
             s = [rec[(bn, key)][mi][1] for bn in BENCH3]
             ax.bar(x + (k - 1) * w, m, w * 0.94, yerr=s, color=col, label=lab_,
                    error_kw=dict(ecolor=MUTED, elinewidth=.6, capsize=1.2))
         ax.set_xticks(x, ["Held-out\nTest", "ClinVar\nHQ", "Protein-\nGym"], fontsize=7.8)
-        ax.set_title(ml, fontsize=9)
+        ax.set_title(ml, loc="left", fontsize=9)
         ax.grid(axis="y", color=GRID, lw=.6)
         ax.set_axisbelow(True)
         ax.tick_params(axis="x", length=0)
     axes[0].set_ylim(0.5, 0.92)
     axes[1].set_ylim(0.85, 1.0)
+    axes[2].set_ylim(0.8, 1.0)
     h, l = axes[0].get_legend_handles_labels()
     fig.legend(h, l, loc="outside upper right", ncol=3, handlelength=1.0)
     save(fig, "fig_af_intervention")
