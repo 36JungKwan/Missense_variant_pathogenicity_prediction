@@ -13,7 +13,7 @@ export interface ModelPrediction {
 }
 
 export interface ModelResults {
-  rb_net: ModelPrediction
+  trimvpp: ModelPrediction
 }
 
 /** Điểm SOTA từ dbNSFP; `null` khi dbNSFP không có điểm cho biến thể (hiển thị "N/A"). */
@@ -22,11 +22,66 @@ export interface SOTAResults {
   revel: number | null
 }
 
-export interface ShapItem {
+// ---------------------------------------------------------------------------
+// Giải thích: Integrated Gradients (full_prediction) + attention map của cross-attention
+// ---------------------------------------------------------------------------
+export type IgModalityName = "DNA" | "Protein" | "Bio_SpliceAI" | "Geometry"
+
+export interface IgModality {
+  modality: IgModalityName
+  signed: number
+  absolute: number
+}
+
+export interface IgToken {
+  modality: "DNA" | "Protein"
+  allele: "Ref" | "Alt"
+  position: number // -16..+16 quanh biến thể
+  signed: number
+  absolute: number
+}
+
+export interface IgFeature {
   feature: string
-  name?: string
-  contribution_value: number
-  description?: string
+  name: string
+  group: "Bio_SpliceAI" | "Geometry"
+  description?: string | null
+  raw_value?: number | null
+  raw_note?: string | null
+  input_value: number // giá trị đã chuẩn hoá đưa vào model
+  signed: number
+}
+
+/** IG giải thích logit Pathogenic so với baseline train3: tổng đóng góp + residual = logit - baseline_logit. */
+export interface IgAnalysis {
+  method: string
+  mode: string
+  baseline: string
+  steps: number
+  logit: number
+  baseline_logit: number
+  completeness_residual: number
+  relative_residual: number
+  residual_over_5pct: boolean
+  modalities: IgModality[]
+  tokens: IgToken[]
+  features: IgFeature[]
+}
+
+export type AttentionQuery = "dna" | "protein" | "bio_geometry"
+
+export interface AttentionMap {
+  query: AttentionQuery
+  query_labels: string[]
+  context_segments: { name: AttentionQuery; labels: string[] }[]
+  key_labels: string[]
+  weights: number[][][] // (heads, query, key); mỗi hàng query cộng lại = 1
+}
+
+export interface AttentionMaps {
+  num_layers: number
+  num_heads: number
+  layers: { layer: number; maps: AttentionMap[] }[]
 }
 
 export interface VariantData {
@@ -36,7 +91,7 @@ export interface VariantData {
   clinvar_ground_truth: ClinVarLabel
   results: ModelResults
   sota: SOTAResults
-  shap_analysis: ShapItem[]
+  ig_analysis: IgAnalysis
 }
 
 export interface VariantPreset extends VariantData {
@@ -49,7 +104,7 @@ export interface BatchVariant {
   variant_id: string
   gene: string
   consequence: string
-  rb_net_probability: number
+  trimvpp_probability: number
   classification: ClassificationType
   clinvar_ground_truth: ClinVarLabel
   sota_alphamissense: number | null
@@ -82,8 +137,8 @@ export interface SingleVariantRequest extends AblationFlags {
   use_cache: boolean
 }
 
-/** Thời gian từng chặng của pipeline (ms): vep, spliceai, fm_dna, fm_prot, geom, norm, shap, db. */
-export type StageTimings = Partial<Record<"vep" | "spliceai" | "fm_dna" | "fm_prot" | "geom" | "norm" | "shap" | "db", number>>
+/** Thời gian từng chặng của pipeline (ms): vep, spliceai, fm_dna, fm_prot, geom, norm, ig, attn, db. */
+export type StageTimings = Partial<Record<"vep" | "spliceai" | "fm_dna" | "fm_prot" | "geom" | "norm" | "ig" | "attn" | "db", number>>
 
 export interface InferenceMeta {
   is_cache_hit: boolean
@@ -93,12 +148,18 @@ export interface InferenceMeta {
   checkpoint?: string | null
   architecture?: string | null
   decision_threshold?: number | null
+  test_mcc?: number | null
   warnings?: string[]
   timings_ms?: StageTimings
 }
 
 export interface SingleVariantResponse extends VariantData {
   meta: InferenceMeta
+}
+
+/** GET /xai: attention = null khi tổ hợp chỉ có một nhánh (không có cross-attention). */
+export interface XaiResponse extends SingleVariantResponse {
+  attention: AttentionMaps | null
 }
 
 /** Trang mở trang chi tiết / XAI (để nút Back quay về đúng ngữ cảnh). */
@@ -130,8 +191,6 @@ export interface ApiErrorDetail {
 // ---------------------------------------------------------------------------
 // Kiểu cho các component trực quan hoá (components/ablation, components/variant)
 // ---------------------------------------------------------------------------
-export type ModalityKey = "dna" | "prot" | "bio" | "geom"
-
 /** 20 đặc trưng Bio (11 BIO_CORE_COLUMNS + 9 SPLICEAI_COLUMNS). */
 export interface BioFeatures {
   AF: number
@@ -166,24 +225,4 @@ export interface GeometryFeatures {
   prot_LVD_Cosine: number
   prot_LID: number
   prot_LVD_Relative: number
-}
-
-export interface ShapContribution {
-  feature: string
-  feature_group:
-    | "dna_pca_component"
-    | "protein_pca_component"
-    | "learned_fusion_latent"
-    | "geometry"
-    | "allele_frequencies"
-    | "spliceai"
-    | "conservation_scores"
-  shap_value_raw_margin: number
-  rank: number
-}
-
-export interface RouterWeights {
-  dna_branch: number
-  protein_branch: number
-  tabular_branch: number // cụm Bio + Geometry
 }

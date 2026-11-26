@@ -1,6 +1,6 @@
-# RB-Net Frontend
+# TriMVPP Frontend
 
-React 19 + Vite + Tailwind UI for the RB-Net missense variant pathogenicity system.
+React 19 + Vite + Tailwind UI for the TriMVPP missense variant pathogenicity system.
 
 ## Run
 

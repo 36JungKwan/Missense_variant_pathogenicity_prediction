@@ -1,40 +1,44 @@
-"""Đặc trưng hình học V2 (LVD + LID) cho một cặp embedding, dùng khi suy luận online.
+"""Đặc trưng hình học V2 (LVD + LID) cho một cặp embedding, khớp module03 của repo huấn luyện.
 
-Phần dựng FAISS index / fit scaler theo lô thuộc repo huấn luyện, không nằm trong backend.
+Các bước làm tròn float16 (delta, LVD_L2, LVD_Cosine) là chủ ý: pipeline huấn luyện lưu embedding fp16 trên GPU
+và trả LVD ở fp16 trước khi fit scaler. LLR = 0 vì bộ geometry step2_matched không dùng LLR.
 """
 from __future__ import annotations
 
 from typing import Dict
 
 import numpy as np
+import torch
+import torch.nn.functional as F
 
 GEOM_V2_MODEL_COLUMNS = ["LVD_L2", "LVD_Cosine", "LID", "LVD_Relative"]
 
 
-def compute_online_geometry(e_ref, e_alt, llr, index=None, k_neighbors: int = 32, epsilon: float = 1e-8) -> Dict[str, float]:
-    """LVD_L2 / LVD_Cosine / LVD_Relative chỉ phụ thuộc cặp embedding. LID cần k láng giềng của vector
-    delta trong FAISS index của context huấn luyện; thiếu index thì trả NaN để normalizer điền trung vị train."""
-    ref = np.asarray(e_ref, dtype=np.float32).reshape(-1)
-    alt = np.asarray(e_alt, dtype=np.float32).reshape(-1)
-    delta = alt - ref
-    ref_norm = float(np.linalg.norm(ref))
-    alt_norm = float(np.linalg.norm(alt))
-    l2 = float(np.linalg.norm(delta))
-    cosine = 1.0 - float(np.dot(ref, alt)) / (ref_norm * alt_norm + epsilon)
+def _lid(delta: np.ndarray, index, k: int, epsilon: float) -> float:
+    if k > index.ntotal:
+        raise ValueError(f"FAISS index has {index.ntotal} vectors, cannot query k={k}")
+    sq_dist, _ = index.search(np.ascontiguousarray(delta.astype(np.float32).reshape(1, -1)), k)
+    r = np.sqrt(np.maximum(sq_dist, 0))
+    log_ratio = np.log(np.clip(r / (r[:, -1:] + epsilon), epsilon, 1.0))
+    sum_log = np.minimum(np.sum(log_ratio, axis=1), -epsilon)
+    return float(-(k / sum_log[0]))
 
-    lid = float("nan")
-    if index is not None:
-        k = int(min(k_neighbors, index.ntotal))
-        if k >= 2:
-            sq_dist, _ = index.search(delta.reshape(1, -1), k)
-            dist = np.sqrt(np.clip(sq_dist[0], 0.0, None)) + epsilon
-            # Ước lượng MLE (Levina-Bickel) của Local Intrinsic Dimensionality.
-            lid = float(-1.0 / (np.mean(np.log(dist / dist[-1])) - epsilon))
 
+def compute_online_geometry(e_ref, e_alt, index=None, k_neighbors: int = 64, epsilon: float = 1e-8) -> Dict[str, float]:
+    """e_ref / e_alt: vector token tâm (1280) ở float16. Thiếu FAISS index thì LID = NaN (điền trung vị train)."""
+    ref16 = np.asarray(e_ref).astype(np.float16).reshape(-1)
+    alt16 = np.asarray(e_alt).astype(np.float16).reshape(-1)
+    delta = alt16 - ref16  # float16
+    ref = torch.from_numpy(ref16.astype(np.float32))[None]
+    alt = torch.from_numpy(alt16.astype(np.float32))[None]
+
+    l2 = torch.norm(alt - ref, p=2, dim=1).to(torch.float16).item()
+    cosine = (1.0 - F.cosine_similarity(ref, alt, dim=1)).to(torch.float16).item()
+    ref_norm = torch.linalg.vector_norm(ref, ord=2, dim=1).item()
     return {
-        "LLR": float(llr),
+        "LLR": 0.0,
         "LVD_L2": l2,
         "LVD_Cosine": cosine,
-        "LID": lid,
+        "LID": float("nan") if index is None else _lid(delta, index, int(k_neighbors), epsilon),
         "LVD_Relative": l2 / (ref_norm + 1e-8),
     }

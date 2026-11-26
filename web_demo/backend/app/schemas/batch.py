@@ -8,7 +8,7 @@ class BatchVariant(BaseModel):
     variant_id: str
     gene: str
     consequence: str
-    rb_net_probability: float
+    trimvpp_probability: float
     classification: PredictionLabel
     clinvar_ground_truth: ClassificationLabel
     sota_alphamissense: Optional[float] = None

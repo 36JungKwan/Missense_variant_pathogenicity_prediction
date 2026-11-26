@@ -33,7 +33,7 @@ import {
 import { BatchVariant, AblationState } from "@/types"
 import { createVcfStreamService, BatchStreamEvent } from "@/services/api"
 
-const STORAGE_KEY = "rbnet_batch_state"
+const STORAGE_KEY = "trimvpp_batch_state"
 const ACCEPTED_EXTENSIONS = [".vcf", ".csv", ".txt", ".parquet", ".xlsx"]
 const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.join(",")
 
@@ -181,7 +181,7 @@ export const Batch: React.FC = () => {
 
       if (newVariant.classification === "Pathogenic") {
         setDangerQueue((prev) => {
-          const newQueue = [...prev, newVariant].sort((a, b) => b.rb_net_probability - a.rb_net_probability)
+          const newQueue = [...prev, newVariant].sort((a, b) => b.trimvpp_probability - a.trimvpp_probability)
           return newQueue.slice(0, 5)
         })
       }
@@ -219,7 +219,7 @@ export const Batch: React.FC = () => {
       v.variant_id,
       v.gene || "N/A",
       `"${v.consequence || "N/A"}"`,
-      v.rb_net_probability,
+      v.trimvpp_probability,
       v.classification,
       v.clinvar_ground_truth,
       v.sota_alphamissense ?? "N/A"
@@ -230,7 +230,7 @@ export const Batch: React.FC = () => {
     
     const link = document.createElement("a")
     link.setAttribute("href", encodedUri)
-    link.setAttribute("download", `RB_Net_Batch_Results_${new Date().getTime()}.csv`)
+    link.setAttribute("download", `TriMVPP_Batch_Results_${new Date().getTime()}.csv`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -459,7 +459,7 @@ export const Batch: React.FC = () => {
                           variant={v.classification === "Pathogenic" ? "destructive" : "success"}
                           className="font-mono text-xs"
                         >
-                          {(v.rb_net_probability * 100).toFixed(1)}%
+                          {(v.trimvpp_probability * 100).toFixed(1)}%
                         </Badge>
                       </TableCell>
                       <TableCell className="text-slate-300 group-hover:text-indigo-500">
@@ -481,7 +481,7 @@ export const Batch: React.FC = () => {
               Top Pathogenic Triage
             </CardTitle>
             <CardDescription className="text-xs text-rose-600/80">
-              Auto-sorted by RB-Net probability score.
+              Auto-sorted by TriMVPP probability score.
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0 overflow-y-auto bg-white flex-1 relative">
@@ -505,7 +505,7 @@ export const Batch: React.FC = () => {
                           {v.variant_id}
                         </button>
                         <Badge variant="destructive" className="font-mono text-[10px] px-1.5 py-0">
-                          {(v.rb_net_probability * 100).toFixed(1)}%
+                          {(v.trimvpp_probability * 100).toFixed(1)}%
                         </Badge>
                       </div>
                       <div className="flex items-center gap-2 text-xs text-slate-500 mb-3">

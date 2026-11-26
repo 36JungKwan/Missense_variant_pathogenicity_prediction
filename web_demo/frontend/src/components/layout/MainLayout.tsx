@@ -29,7 +29,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 </span>
                 <div className="flex items-center space-x-2">
                   <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                    RB-Net Hybrid
+                    TriMVPP
                   </span>
                 </div>
               </div>
@@ -100,14 +100,13 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       <footer className="border-t border-slate-200 bg-white py-6 text-center text-xs text-slate-500">
         <div className="max-w-[1440px] mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <p>
-            © 2026 RB-Net Variant Classifier • Genomic Pathogenicity Assessment • AIP491 Project
+            © 2026 TriMVPP Variant Classifier • Genomic Pathogenicity Assessment • AIP491 Project
           </p>
           <div className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1 text-slate-400">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
               Inference Engine Ready
             </span>
-            <span>FastAPI Integration (Phase 2)</span>
           </div>
         </div>
       </footer>

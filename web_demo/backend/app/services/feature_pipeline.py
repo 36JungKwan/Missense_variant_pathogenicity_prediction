@@ -1,4 +1,4 @@
-"""Trích xuất đặc trưng 3 nhánh: embedding DNA/Protein (center pooling), 11 bio core + 9 SpliceAI,
+"""Trích xuất đặc trưng 3 nhánh: cửa sổ 33 token DNA/Protein, 11 bio core + 9 SpliceAI,
 8 geometry V2; và chuẩn hoá bằng scaler .pkl của nhóm.
 
 Các bước được tách nhỏ để:
@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.constants import BIO_CORE_COLUMNS, GEOM_BRANCH_COLUMNS, SPLICEAI_COLUMNS, VariantKey
 from app.core.errors import FeatureArtifactMissingError, FoundationModelUnavailableError, InvalidVariantError, PipelineError
 from app.core.log import timed_stage
-from app.ml_core.fm_extractor import EmbeddingBatch
+from app.ml_core.fm_extractor import K_RADIUS, TokenWindow
 from app.ml_core.geometry_v2 import compute_online_geometry
 from app.ml_core.normalizer import BIO_SCALER_FILES, GEOM_V2_COLUMNS, FeatureNormalizer, geom_scaler_filename
 from app.ml_core.spliceai_lookup import IndexedSpliceAILookup
@@ -45,20 +45,18 @@ EXTRACTOR_TAG = "fx-" + hashlib.sha1(
         str(settings.DNA_WINDOW), str(settings.PROT_WINDOW),
         settings.DNA_PAD_CHAR, settings.PROT_PAD_CHAR,
         FM_DEVICE.type, FM_DTYPE,
+        f"token-window-k{K_RADIUS}", "geom-step2-matched",
     ]).encode()
 ).hexdigest()[:12]
 
-Embedding = Tuple[np.ndarray, np.ndarray, float]  # (E_ref, E_alt, LLR)
 SeqInput = Tuple[str, str, int]  # (ref_seq, alt_seq, center_index)
 
 
 @dataclass
 class VariantFeatures:
     variant_id: str
-    dna_ref: np.ndarray
-    dna_alt: np.ndarray
-    prot_ref: np.ndarray
-    prot_alt: np.ndarray
+    dna: TokenWindow
+    prot: TokenWindow
     raw: Dict[str, Optional[float]]  # 20 bio thô + {dna,prot}_{LLR,LVD_L2,LVD_Cosine,LID,LVD_Relative} thô
     warnings: List[str] = field(default_factory=list)
 
@@ -67,7 +65,7 @@ class VariantFeatures:
 # Foundation Models
 # ============================================================================================
 class FoundationModelHub:
-    """Singleton giữ NT-v1 500M và ESM2 650M trên GPU (fp16) / CPU (fp32) giữa các request."""
+    """Singleton giữ NT-v1 500M và ESM-1b 650M trên GPU (fp16) / CPU (fp32) giữa các request."""
 
     _SPECS = {"dna": (settings.DNA_MODEL_ID, "dna"), "prot": (settings.PROT_MODEL_ID, "protein")}
 
@@ -101,24 +99,23 @@ class FoundationModelHub:
                 self._extractors[kind] = FeatureExtractor(manager)
             return self._extractors[kind]
 
-    def embed_many(self, kind: str, inputs: Sequence[SeqInput]) -> List[Embedding]:
-        """Embedding cho nhiều biến thể; gộp tối đa FM_BATCH_VARIANTS biến thể (x3 chuỗi) mỗi forward."""
+    def embed_many(self, kind: str, inputs: Sequence[SeqInput]) -> List[TokenWindow]:
+        """Embedding cho nhiều biến thể; gộp tối đa FM_BATCH_VARIANTS biến thể (x2 chuỗi) mỗi forward."""
         if not inputs:
             return []
         extractor = self._extractor(kind)
         step = max(1, settings.FM_BATCH_VARIANTS)
-        parts: List[EmbeddingBatch] = []
+        windows: List[TokenWindow] = []
         with timed_stage(f"fm_{kind}"), self._run_locks[kind], warnings.catch_warnings():
             warnings.simplefilter("ignore")
             for start in range(0, len(inputs), step):
                 chunk = inputs[start:start + step]
-                parts.append(extractor.embed(
+                windows.extend(extractor.embed(
                     [c[0] for c in chunk], [c[1] for c in chunk], [c[2] for c in chunk], self._SPECS[kind][1]
                 ))
-        batch = EmbeddingBatch.concat(parts)
-        return [(batch.center_ref[i], batch.center_alt[i], float(batch.llr[i])) for i in range(len(inputs))]
+        return windows
 
-    def embed(self, kind: str, ref_seq: str, alt_seq: str, center: int) -> Embedding:
+    def embed(self, kind: str, ref_seq: str, alt_seq: str, center: int) -> TokenWindow:
         return self.embed_many(kind, [(ref_seq, alt_seq, center)])[0]
 
     def load_all(self, warm_up: bool = True) -> None:
@@ -200,14 +197,15 @@ def protein_inputs(variant: VariantKey, vep: VepRecord) -> SeqInput:
     return sequence_service.protein_windows(vep.ensp, vep.protein_position, vep.ref_aa, vep.alt_aa)
 
 
-def _geometry(prefix: str, e_ref: np.ndarray, e_alt: np.ndarray, llr: float) -> Tuple[Dict[str, Optional[float]], Optional[str]]:
+def _geometry(prefix: str, window: TokenWindow) -> Tuple[Dict[str, Optional[float]], Optional[str]]:
     index = _faiss_index(BRANCHES[prefix])
     warning = None
     if index is None:
         warning = (f"lid_imputed_{prefix}: no FAISS index '{BRANCHES[prefix]}.index' in FAISS_INDEX_DIR; "
                    "LID uses the train-median fill value")
     with timed_stage("geom"):
-        geometry = compute_online_geometry(e_ref, e_alt, llr, index=index, k_neighbors=settings.GEOM_K_NEIGHBORS)
+        geometry = compute_online_geometry(
+            window.center_ref, window.center_alt, index=index, k_neighbors=settings.GEOM_K_NEIGHBORS)
     return {f"{prefix}_{name}": _nan_to_none(value) for name, value in geometry.items()}, warning
 
 
@@ -215,8 +213,8 @@ def assemble_features(
     variant: VariantKey,
     vep: VepRecord,
     spliceai: Dict[str, float],
-    dna: Embedding,
-    prot: Embedding,
+    dna: TokenWindow,
+    prot: TokenWindow,
 ) -> VariantFeatures:
     raw: Dict[str, Optional[float]] = {c: _nan_to_none(vep.bio_core.get(c, float("nan"))) for c in BIO_CORE_COLUMNS}
     raw.update({c: _nan_to_none(spliceai.get(c, float("nan"))) for c in SPLICEAI_COLUMNS})
@@ -224,23 +222,19 @@ def assemble_features(
     if raw["SpliceAI_pred_DS_max"] is None:
         feature_warnings.append(
             "spliceai_not_found: variant absent from the SpliceAI MANE VCF; train-median imputation applies")
-    for prefix, (e_ref, e_alt, llr) in (("dna", dna), ("prot", prot)):
-        values, warning = _geometry(prefix, e_ref, e_alt, llr)
+    for prefix, window in (("dna", dna), ("prot", prot)):
+        values, warning = _geometry(prefix, window)
         raw.update(values)
         if warning:
             feature_warnings.append(warning)
-    return VariantFeatures(
-        variant_id=variant.variant_id,
-        dna_ref=dna[0], dna_alt=dna[1], prot_ref=prot[0], prot_alt=prot[1],
-        raw=raw, warnings=feature_warnings,
-    )
+    return VariantFeatures(variant_id=variant.variant_id, dna=dna, prot=prot, raw=raw, warnings=feature_warnings)
 
 
 def build_features(
     variant: VariantKey,
     vep: VepRecord,
     spliceai: Optional[Dict[str, float]] = None,
-    dna: Optional[Embedding] = None,
+    dna: Optional[TokenWindow] = None,
 ) -> VariantFeatures:
     """Toàn bộ khâu trích xuất cho một biến thể missense. `dna`/`spliceai` có thể được tính trước
     (song song với VEP) để không phải tính lại."""
@@ -276,14 +270,11 @@ def refresh_imputed_geometry(features: VariantFeatures) -> bool:
     """Tính lại geometry từ embedding đã lưu cho nhánh nào trước đây phải điền LID (thiếu FAISS index)
     mà nay index đã có. Không chạy lại VEP / Foundation Models. Trả True nếu có thay đổi."""
     changed = False
-    embeddings = {"dna": (features.dna_ref, features.dna_alt), "prot": (features.prot_ref, features.prot_alt)}
-    for prefix, (e_ref, e_alt) in embeddings.items():
+    for prefix, window in (("dna", features.dna), ("prot", features.prot)):
         if features.raw.get(f"{prefix}_LID") is not None or _faiss_index(BRANCHES[prefix]) is None:
             continue
-        llr = features.raw.get(f"{prefix}_LLR")
-        values, _ = _geometry(prefix, e_ref, e_alt, float("nan") if llr is None else llr)
+        values, _ = _geometry(prefix, window)
         features.raw.update(values)
-        features.raw[f"{prefix}_LLR"] = llr  # LLR đến từ Foundation Model, giữ nguyên giá trị đã lưu
         features.warnings = [w for w in features.warnings if not w.startswith(f"lid_imputed_{prefix}:")]
         changed = True
     return changed
@@ -341,7 +332,8 @@ def normalize_tabular(raw: Dict[str, Optional[float]], bio_columns: List[str], g
                 scaled = normalizer.transform_geom_v2(frame, artifacts_dir, config_id)
                 values.update({f"{prefix}_{c}": float(scaled.iloc[0][c]) for c in GEOM_BRANCH_COLUMNS})
 
-    return np.asarray([values[c] for c in bio_columns + geom_columns], dtype=np.float32)
+    # NaN còn lại sau chuẩn hoá -> 0, như VariantFusionDataset lúc huấn luyện.
+    return np.nan_to_num(np.asarray([values[c] for c in bio_columns + geom_columns], dtype=np.float32), nan=0.0)
 
 
 # ============================================================================================

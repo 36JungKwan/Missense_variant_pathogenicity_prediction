@@ -27,12 +27,7 @@ SPLICEAI_COLUMNS: List[str] = SPLICEAI_DS_COLUMNS + [
 GEOM_BRANCH_COLUMNS: List[str] = ["LVD_L2", "LVD_Cosine", "LID", "LVD_Relative"]
 GEOM_COLUMNS: List[str] = [f"{p}_{c}" for p in ("dna", "prot") for c in GEOM_BRANCH_COLUMNS]
 
-# Số chiều nhánh Bio trong checkpoint -> bộ cột tương ứng.
-BIO_COLUMN_SETS = {
-    11: BIO_CORE_COLUMNS,
-    15: BIO_CORE_COLUMNS + SPLICEAI_DS_COLUMNS,
-    20: BIO_CORE_COLUMNS + SPLICEAI_COLUMNS,
-}
+BIO_COLUMNS: List[str] = BIO_CORE_COLUMNS + SPLICEAI_COLUMNS  # 20 chiều
 
 
 def compute_ablation_mask(

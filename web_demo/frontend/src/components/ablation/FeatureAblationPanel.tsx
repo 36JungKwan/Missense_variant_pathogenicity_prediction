@@ -1,10 +1,11 @@
-import React from "react"
+import React, { useEffect, useState } from "react"
 import { Binary, Dna, Flame, Layers, RotateCcw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { FULL_ABLATION, countActiveModules } from "@/lib/ablation"
+import { FULL_ABLATION, ablationStateToKey, countActiveModules } from "@/lib/ablation"
+import { fetchTestMcc } from "@/services/api"
 import type { AblationState } from "@/types"
 
 interface ModuleSpec {
@@ -16,11 +17,11 @@ interface ModuleSpec {
   iconClass: string
 }
 
-/** 3 nhóm khớp đúng 3 bit (use_dna, use_prot, use_biogeom) của checkpoint RB-Net. */
+/** 3 nhóm khớp đúng 3 bit (use_dna, use_prot, use_biogeom) của checkpoint TriMVPP. */
 const MODULES: ModuleSpec[] = [
-  { key: "dnaFeatures", title: "DNA Sequence", model: "NT-v1 500M", detail: "1001 bp window, center embedding",
+  { key: "dnaFeatures", title: "DNA Sequence", model: "NT-v1 500M", detail: "1001 bp window, 33 ref/alt tokens",
     icon: Binary, iconClass: "text-blue-500" },
-  { key: "proteinFeatures", title: "Protein Sequence", model: "ESM2 650M", detail: "501 aa window, center embedding",
+  { key: "proteinFeatures", title: "Protein Sequence", model: "ESM-1b 650M", detail: "501 aa window, 33 ref/alt tokens",
     icon: Dna, iconClass: "text-purple-500" },
   { key: "bioGeomFeatures", title: "Bio + Geom + SpliceAI", model: "28 tabular features",
     detail: "11 conservation/AF + 9 SpliceAI + 8 manifold geometry (LVD/LID)", icon: Flame, iconClass: "text-amber-500" },
@@ -43,6 +44,13 @@ export const FeatureAblationPanel: React.FC<FeatureAblationPanelProps> = ({
   orientation = "horizontal",
 }) => {
   const active = countActiveModules(value)
+  const [testMcc, setTestMcc] = useState<Record<string, number>>({})
+  useEffect(() => {
+    let mounted = true
+    fetchTestMcc().then((scores) => mounted && setTestMcc(scores))
+    return () => { mounted = false }
+  }, [])
+  const mcc = testMcc[ablationStateToKey(value)]
 
   return (
     <Card className="border-slate-200 shadow-sm">
@@ -99,6 +107,9 @@ export const FeatureAblationPanel: React.FC<FeatureAblationPanelProps> = ({
             </label>
           ))}
         </div>
+        {mcc !== undefined && (
+          <p className="mt-2 text-[11px] text-slate-400">Test-set MCC of this configuration: {mcc.toFixed(2)}</p>
+        )}
         {active === 0 && (
           <p className="mt-2 text-xs font-medium text-rose-600">At least one module must stay enabled.</p>
         )}

@@ -58,7 +58,7 @@ class FeatureArtifactMissingError(PipelineError):
 
 
 class FoundationModelUnavailableError(PipelineError):
-    """Không nạp được NT-v1 / ESM2 (sai model id, thiếu trọng số trong HF_HOME, hết VRAM...)."""
+    """Không nạp được NT-v1 / ESM-1b (sai model id, thiếu trọng số trong HF_HOME, hết VRAM...)."""
     status_code = 503
     error_code = "FOUNDATION_MODEL_UNAVAILABLE"
 
@@ -80,7 +80,7 @@ class NonMissenseVariantError(PipelineError):
             message
             or (
                 f"Invalid variant consequence: '{detected_consequence}'. "
-                "RB-Net exclusively supports missense variants."
+                "TriMVPP exclusively supports missense variants."
             ),
             variant_id=variant_id,
             detected_consequence=detected_consequence,

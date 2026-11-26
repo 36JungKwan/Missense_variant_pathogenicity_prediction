@@ -1,4 +1,4 @@
-"""Kiểm tra sức khoẻ PostgreSQL của RB-Net (chỉ đọc).
+"""Kiểm tra sức khoẻ PostgreSQL của TriMVPP (chỉ đọc).
 
 Chạy:  python scripts/check_db.py
 Thoát mã 1 nếu có lỗi (mất kết nối, thiếu bảng/pgvector, vector sai chiều, dòng mồ côi...).
@@ -51,6 +51,11 @@ def main() -> int:
             bad = q(f"SELECT count(*) FROM inference_features WHERE vector_dims({col}) <> :d", d=EMBEDDING_DIM).scalar()
             if bad:
                 errors.append(f"{bad} rows with {col} dimension != {EMBEDDING_DIM}")
+
+        bad = q("SELECT count(*) FROM inference_features WHERE octet_length(tok_dna) <> :n OR octet_length(tok_pro) <> :n "
+                "OR octet_length(tok_mask) <> 132", n=2 * 33 * EMBEDDING_DIM * 2).scalar()
+        if bad:
+            errors.append(f"{bad} rows with malformed token windows")
 
         stale_fx = q("SELECT count(*) FROM inference_features WHERE extractor_tag <> :t", t=EXTRACTOR_TAG).scalar()
         if stale_fx:

@@ -55,8 +55,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="RB-Net Hybrid Architecture - API Gateway",
-    version="1.1.0",
+    description="TriMVPP - API Gateway",
+    version="2.0.0",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     docs_url="/docs",
     lifespan=lifespan,

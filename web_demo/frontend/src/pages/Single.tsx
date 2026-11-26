@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
+  AlertTriangle,
   ArrowLeft,
   BarChart3,
   CheckCircle2,
@@ -28,6 +29,7 @@ import {
   ablationStateToMask,
   countActiveModules,
   maskToAblationState,
+  normalizeAblationState,
 } from "@/lib/ablation"
 import type { AblationState, ClinVarLabel, InferenceMeta, VariantData } from "@/types"
 import { predictSingleVariant } from "@/services/api"
@@ -37,11 +39,11 @@ const ALPHAMISSENSE_THRESHOLD = 0.56
 const REVEL_THRESHOLD = 0.5
 
 /** Một dòng so sánh với mô hình SOTA; dbNSFP không có điểm (null) -> hiển thị "N/A". */
-const SotaRow: React.FC<{ label: string; score: number | null; threshold: number; rbNetProbability: number }> = ({
+const SotaRow: React.FC<{ label: string; score: number | null; threshold: number; trimvppProbability: number }> = ({
   label,
   score,
   threshold,
-  rbNetProbability,
+  trimvppProbability,
 }) => {
   const available = score !== null && score !== undefined
   return (
@@ -58,7 +60,7 @@ const SotaRow: React.FC<{ label: string; score: number | null; threshold: number
         )}
       </TableCell>
       <TableCell className="text-right text-slate-600 font-mono">
-        {available ? `${(100 - Math.abs(rbNetProbability - score) * 100).toFixed(1)}%` : "N/A"}
+        {available ? `${(100 - Math.abs(trimvppProbability - score) * 100).toFixed(1)}%` : "N/A"}
       </TableCell>
     </TableRow>
   )
@@ -136,6 +138,47 @@ const SotaScoreChart: React.FC<{ rows: SotaChartRow[] }> = ({ rows }) => (
   </div>
 )
 
+/** Trạng thái trang Single giữ trong sessionStorage để quay lại (menu, nút Back từ XAI) không mất kết quả. */
+const STORAGE_KEY = "trimvpp_single_state_v1"
+
+interface SingleSnapshot {
+  variantInput: string
+  activePresetId: string | null
+  useCache: boolean
+  ablation: AblationState
+  submittedVariant: string | null
+  result: VariantData | null
+  meta: InferenceMeta | null
+}
+
+function readSnapshot(): SingleSnapshot | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<SingleSnapshot>
+    if (!parsed || typeof parsed.variantInput !== "string") return null
+    return {
+      variantInput: parsed.variantInput,
+      activePresetId: typeof parsed.activePresetId === "string" ? parsed.activePresetId : null,
+      useCache: parsed.useCache !== false,
+      ablation: normalizeAblationState(parsed.ablation),
+      submittedVariant: typeof parsed.submittedVariant === "string" ? parsed.submittedVariant : null,
+      result: parsed.result && parsed.result.results ? parsed.result : null,
+      meta: parsed.meta ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function writeSnapshot(snapshot: SingleSnapshot): void {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  } catch {
+    // bộ nhớ bị chặn / đầy: trang vẫn chạy, chỉ không khôi phục được khi quay lại
+  }
+}
+
 const clinvarBadgeVariant =(label: ClinVarLabel) =>
   label === "Pathogenic" ? "destructive" : label === "Benign" ? "success" : "warning"
 
@@ -145,18 +188,36 @@ export const Single: React.FC = () => {
   const openedFromBatch = searchParams.get("from") === "batch"
   const initialMask = Number.parseInt(searchParams.get("mask") || "", 10)
 
+  // Khôi phục kết quả đã tra (mở từ menu, hoặc nút Back của XAI với đúng biến thể + tổ hợp đó).
+  // URL trỏ tới biến thể / tổ hợp khác (ví dụ bấm một dòng ở Batch) -> chạy biến thể đó như bình thường.
+  const [initial] = useState(() => {
+    const linked = searchParams.get("variant")
+    const snapshot = readSnapshot()
+    const matches =
+      snapshot?.result != null &&
+      (!linked ||
+        (linked === snapshot.submittedVariant &&
+          (Number.isNaN(initialMask) || initialMask === ablationStateToMask(snapshot.ablation))))
+    return { snapshot: matches ? snapshot : null, linked: matches ? null : linked }
+  })
+  const restored = initial.snapshot
+
   // Input (chỉ chạy suy luận khi bấm Run / Enter — gõ phím không gọi API)
-  const [variantInput, setVariantInput] = useState<string>(searchParams.get("variant") || DEFAULT_VARIANT)
-  const [activePresetId, setActivePresetId] = useState<string | null>(searchParams.get("variant") ? null : "pathogenic")
-  const [useCache, setUseCache] = useState<boolean>(true)
+  const [variantInput, setVariantInput] = useState<string>(
+    restored?.variantInput ?? (initial.linked || DEFAULT_VARIANT)
+  )
+  const [activePresetId, setActivePresetId] = useState<string | null>(
+    restored ? restored.activePresetId : initial.linked ? null : "pathogenic"
+  )
+  const [useCache, setUseCache] = useState<boolean>(restored?.useCache ?? true)
   const [ablation, setAblation] = useState<AblationState>(
-    Number.isNaN(initialMask) ? FULL_ABLATION : maskToAblationState(initialMask)
+    restored?.ablation ?? (Number.isNaN(initialMask) ? FULL_ABLATION : maskToAblationState(initialMask))
   )
 
   // Kết quả
-  const [submittedVariant, setSubmittedVariant] = useState<string | null>(null)
-  const [currentResult, setCurrentResult] = useState<VariantData | null>(null)
-  const [meta, setMeta] = useState<InferenceMeta | null>(null)
+  const [submittedVariant, setSubmittedVariant] = useState<string | null>(restored?.submittedVariant ?? null)
+  const [currentResult, setCurrentResult] = useState<VariantData | null>(restored?.result ?? null)
+  const [meta, setMeta] = useState<InferenceMeta | null>(restored?.meta ?? null)
   const [isLoading, setIsLoading] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const requestSeq = useRef(0)
@@ -201,16 +262,26 @@ export const Single: React.FC = () => {
     runInference(trimmed, state, useCache)
   }
 
-  // Mở bằng liên kết (từ Batch Screening / nút Back của XAI): nạp kết quả ngay, ưu tiên cache PostgreSQL.
+  // Mở trang: khôi phục kết quả cũ (không gọi API) hoặc chạy biến thể từ liên kết (Batch), ưu tiên cache PostgreSQL.
   useEffect(() => {
-    const linked = searchParams.get("variant")
-    if (linked) {
-      setSubmittedVariant(linked)
-      runInference(linked, ablation, true)
+    if (restored?.submittedVariant) {
+      // ghi lại biến thể + mask lên URL để chia sẻ / nút Back của XAI vẫn đúng
+      const next = new URLSearchParams(searchParams)
+      next.set("variant", restored.submittedVariant)
+      next.set("mask", String(ablationStateToMask(restored.ablation)))
+      setSearchParams(next, { replace: true })
+    } else if (initial.linked) {
+      setSubmittedVariant(initial.linked)
+      runInference(initial.linked, ablation, true)
     }
     // chỉ chạy một lần khi trang được mở
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Lưu trạng thái mỗi khi kết quả / lựa chọn thay đổi; kết quả cũ chỉ bị thay khi tra biến thể mới hoặc đổi tổ hợp.
+  useEffect(() => {
+    writeSnapshot({ variantInput, activePresetId, useCache, ablation, submittedVariant, result: currentResult, meta })
+  }, [variantInput, activePresetId, useCache, ablation, submittedVariant, currentResult, meta])
 
   // Đổi tổ hợp modality là thao tác chủ động -> chạy lại cho biến thể ĐÃ submit (không phải chuỗi đang gõ).
   const handleAblationChange = (next: AblationState) => {
@@ -237,21 +308,16 @@ export const Single: React.FC = () => {
     navigate(`/xai?${params.toString()}`)
   }
 
-  const presetButton = (id: string, label: string, tone: "rose" | "emerald") => (
+  const presetButton = (id: string, label: string) => (
     <button
       type="button"
       onClick={() => handleSelectPreset(id)}
       className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-all cursor-pointer flex items-center gap-1.5 ${
         activePresetId === id
-          ? tone === "rose"
-            ? "bg-rose-50 text-rose-700 border-rose-300 font-semibold shadow-2xs"
-            : "bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold shadow-2xs"
-          : `bg-white text-slate-600 border-slate-200 ${
-              tone === "rose" ? "hover:bg-rose-50/50 hover:text-rose-600" : "hover:bg-emerald-50/50 hover:text-emerald-600"
-            }`
+          ? "bg-blue-50 text-blue-700 border-blue-300 font-semibold shadow-2xs"
+          : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50/50 hover:text-blue-600"
       }`}
     >
-      <span className={`h-2 w-2 rounded-full ${tone === "rose" ? "bg-rose-500" : "bg-emerald-500"}`}></span>
       <span>{label}</span>
     </button>
   )
@@ -361,9 +427,9 @@ export const Single: React.FC = () => {
               <Info className="h-3.5 w-3.5" />
               Quick Validation Presets:
             </span>
-            {presetButton("pathogenic", "BRAF V600E (Pathogenic)", "rose")}
-            {presetButton("brca1", "BRCA1 p.Arg1699Gln (Pathogenic)", "rose")}
-            {presetButton("benign", "BRCA2 p.Asn372His (Benign)", "emerald")}
+            {presetButton("pathogenic", "BRAF p.Val600Glu")}
+            {presetButton("brca1", "BRCA1 p.Arg1699Gln")}
+            {presetButton("benign", "BRCA2 p.Asn372His")}
           </div>
         </CardContent>
       </Card>
@@ -388,7 +454,7 @@ export const Single: React.FC = () => {
           {isLoading ? (
             <>
               <Loader2 className="h-10 w-10 text-blue-500 animate-spin" />
-              <p className="text-sm font-medium text-slate-600">Running RB-Net inference...</p>
+              <p className="text-sm font-medium text-slate-600">Running TriMVPP inference...</p>
             </>
           ) : (
             <>
@@ -423,9 +489,9 @@ export const Single: React.FC = () => {
                     <Dna className="h-6 w-6" />
                   </div>
                   <div>
-                    <CardTitle className="text-xl font-extrabold text-blue-950">RB-Net Hybrid Architecture</CardTitle>
+                    <CardTitle className="text-xl font-extrabold text-blue-950">TriMVPP Architecture</CardTitle>
                     <CardDescription className="text-xs text-blue-800/70 mt-0.5">
-                      Router-expert fusion of DNA (NT-v1), protein (ESM2) and Bio + Geometry + SpliceAI features
+                      Cross-attention over DNA (NT-v1), protein (ESM-1b) and Bio + Geometry + SpliceAI features
                     </CardDescription>
                   </div>
                 </div>
@@ -480,39 +546,56 @@ export const Single: React.FC = () => {
                   className="text-xs text-blue-600 border-blue-200 hover:bg-blue-50 flex items-center gap-1.5"
                 >
                   <BarChart3 className="h-3.5 w-3.5" />
-                  <span>Inspect SHAP Attribution</span>
+                  <span>Inspect IG & Attention</span>
                 </Button>
               </div>
 
               {/* Prediction vs Ground Truth */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center p-6 rounded-2xl bg-white border border-slate-200 shadow-xs">
+              <div className="grid grid-cols-1 gap-6 p-6 rounded-2xl bg-white border border-slate-200 shadow-xs">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">RB-Net Prediction</span>
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">TriMVPP Prediction</span>
                     <Badge
-                      variant={currentResult.results.rb_net.label === "Pathogenic" ? "destructive" : "success"}
-                      className="text-xs px-3 py-1 font-bold"
+                      variant={currentResult.results.trimvpp.label === "Pathogenic" ? "destructive" : "success"}
+                      className="text-base px-4 py-1.5 font-bold flex items-center gap-1.5"
                     >
-                      {currentResult.results.rb_net.label}
+                      {currentResult.results.trimvpp.label === "Pathogenic"
+                        ? <AlertTriangle className="h-4 w-4" />
+                        : <CheckCircle2 className="h-4 w-4" />}
+                      {currentResult.results.trimvpp.label}
                     </Badge>
                   </div>
 
-                  <div className="flex items-baseline gap-2">
-                    <span className={`text-4xl sm:text-5xl font-extrabold font-mono ${
-                      currentResult.results.rb_net.label === "Pathogenic" ? "text-rose-600" : "text-emerald-600"
-                    }`}>
-                      {(currentResult.results.rb_net.probability * 100).toFixed(1)}%
-                    </span>
-                    <span className="text-xs text-slate-500 font-medium">Pathogenicity Probability</span>
+                  {/* Xác suất và ngưỡng cạnh nhau, cùng cỡ chữ để so sánh trực tiếp */}
+                  <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+                    <div>
+                      <span className={`block text-4xl sm:text-5xl font-extrabold font-mono leading-none ${
+                        currentResult.results.trimvpp.label === "Pathogenic" ? "text-rose-600" : "text-emerald-600"
+                      }`}>
+                        {(currentResult.results.trimvpp.probability * 100).toFixed(1)}%
+                      </span>
+                      <span className="mt-1.5 block text-xs text-slate-500 font-medium">Pathogenicity Probability</span>
+                    </div>
+                    <div className="border-l border-slate-200 pl-8">
+                      <span className="block text-4xl sm:text-5xl font-extrabold font-mono leading-none text-slate-900">
+                        {thresholdPct !== null ? (
+                          <><span className="text-2xl sm:text-3xl align-top mr-1">&ge;</span>{thresholdPct}%</>
+                        ) : "N/A"}
+                      </span>
+                      <span className="mt-1.5 flex items-center gap-1 text-xs text-slate-500 font-medium">
+                        <Scale className="h-3.5 w-3.5" />
+                        Classification Threshold
+                      </span>
+                    </div>
                   </div>
 
                   {/* Thanh xác suất + vạch ngưỡng */}
                   <div className="relative w-full h-3 rounded-full bg-slate-100">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        currentResult.results.rb_net.label === "Pathogenic" ? "bg-rose-500" : "bg-emerald-500"
+                        currentResult.results.trimvpp.label === "Pathogenic" ? "bg-rose-500" : "bg-emerald-500"
                       }`}
-                      style={{ width: `${currentResult.results.rb_net.probability * 100}%` }}
+                      style={{ width: `${currentResult.results.trimvpp.probability * 100}%` }}
                     />
                     {threshold !== null && (
                       <div
@@ -523,23 +606,18 @@ export const Single: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Ngưỡng phân loại (lấy động từ checkpoint) */}
-                  <div className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-900 text-white">
-                    <Scale className="h-5 w-5 shrink-0 mt-0.5 text-amber-300" />
+                  {/* Quy tắc phân loại (ngưỡng lấy động từ checkpoint) */}
+                  <p className="text-xs text-slate-600 leading-relaxed">
                     {thresholdPct !== null ? (
-                      <div className="space-y-0.5">
-                        <p className="text-sm font-bold">
-                          Classification Threshold: &ge; {thresholdPct}% &rarr; <span className="text-rose-300">Pathogenic</span>
-                        </p>
-                        <p className="text-xs text-slate-300">
-                          &lt; {thresholdPct}% &rarr; Benign
-                          {meta?.checkpoint ? ` · MCC-optimal threshold of ${meta.checkpoint}` : ""}
-                        </p>
-                      </div>
+                      <>
+                        &ge; {thresholdPct}% &rarr; <span className="font-semibold text-rose-600">Pathogenic</span>
+                        {" · "}&lt; {thresholdPct}% &rarr; <span className="font-semibold text-emerald-600">Benign</span>
+                        {meta?.checkpoint ? <span className="text-slate-400">{` · MCC-optimal threshold of ${meta.checkpoint}`}</span> : null}
+                      </>
                     ) : (
-                      <p className="text-sm font-semibold">Classification threshold not reported by the backend.</p>
+                      "Classification threshold not reported by the backend."
                     )}
-                  </div>
+                  </p>
                 </div>
 
                 {/* ClinVar Ground Truth */}
@@ -551,7 +629,7 @@ export const Single: React.FC = () => {
 
                   <div className="flex items-center justify-between pt-1">
                     <span className="text-xs text-slate-600 font-medium">Official ClinVar Validation:</span>
-                    <Badge variant={clinvarBadgeVariant(currentResult.clinvar_ground_truth)} className="text-xs px-3 py-0.5 font-bold">
+                    <Badge variant={clinvarBadgeVariant(currentResult.clinvar_ground_truth)} className="text-sm px-3.5 py-1 font-bold">
                       {currentResult.clinvar_ground_truth}
                     </Badge>
                   </div>
@@ -562,10 +640,10 @@ export const Single: React.FC = () => {
                         <Info className="h-4 w-4 text-slate-500 shrink-0" />
                         <span>ClinVar has no definitive label (VUS / conflicting); no benchmark comparison.</span>
                       </span>
-                    ) : currentResult.results.rb_net.label === currentResult.clinvar_ground_truth ? (
+                    ) : currentResult.results.trimvpp.label === currentResult.clinvar_ground_truth ? (
                       <span className="text-emerald-700 font-semibold flex items-center gap-1.5">
                         <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                        <span>Consistent: RB-Net prediction matches ClinVar Ground Truth.</span>
+                        <span>Consistent: TriMVPP prediction matches ClinVar Ground Truth.</span>
                       </span>
                     ) : (
                       <span className="text-amber-700 font-semibold flex items-center gap-1.5">
@@ -593,7 +671,7 @@ export const Single: React.FC = () => {
                 <span className="text-xs font-normal text-slate-500">Probability Scale [0.0 - 1.0]</span>
               </CardTitle>
               <CardDescription className="text-xs">
-                Comparative validation of RB-Net against Google DeepMind AlphaMissense and REVEL.
+                Comparative validation of TriMVPP against Google DeepMind AlphaMissense and REVEL.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
@@ -611,14 +689,14 @@ export const Single: React.FC = () => {
                   <TableRow className="bg-blue-50/50 font-semibold">
                     <TableCell className="flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-blue-600"></span>
-                      <span>RB-Net Hybrid (Proposed)</span>
+                      <span>TriMVPP (Proposed)</span>
                     </TableCell>
                     <TableCell className="font-mono text-blue-700 font-bold">
-                      {currentResult.results.rb_net.probability.toFixed(3)}
+                      {currentResult.results.trimvpp.probability.toFixed(3)}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={currentResult.results.rb_net.label === "Pathogenic" ? "destructive" : "success"}>
-                        {currentResult.results.rb_net.label}
+                      <Badge variant={currentResult.results.trimvpp.label === "Pathogenic" ? "destructive" : "success"}>
+                        {currentResult.results.trimvpp.label}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right text-blue-700 font-medium">Anchor Model</TableCell>
@@ -627,13 +705,13 @@ export const Single: React.FC = () => {
                     label="AlphaMissense (Google DeepMind)"
                     score={currentResult.sota.alphamissense}
                     threshold={ALPHAMISSENSE_THRESHOLD}
-                    rbNetProbability={currentResult.results.rb_net.probability}
+                    trimvppProbability={currentResult.results.trimvpp.probability}
                   />
                   <SotaRow
                     label="REVEL (Ensemble Predictor)"
                     score={currentResult.sota.revel}
                     threshold={REVEL_THRESHOLD}
-                    rbNetProbability={currentResult.results.rb_net.probability}
+                    trimvppProbability={currentResult.results.trimvpp.probability}
                   />
                 </TableBody>
               </Table>
@@ -642,7 +720,7 @@ export const Single: React.FC = () => {
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Score Comparison</p>
                 <SotaScoreChart
                   rows={[
-                    { label: "RB-Net Hybrid", score: currentResult.results.rb_net.probability, threshold, anchor: true },
+                    { label: "TriMVPP", score: currentResult.results.trimvpp.probability, threshold, anchor: true },
                     { label: "AlphaMissense", score: currentResult.sota.alphamissense, threshold: ALPHAMISSENSE_THRESHOLD },
                     { label: "REVEL", score: currentResult.sota.revel, threshold: REVEL_THRESHOLD },
                   ]}

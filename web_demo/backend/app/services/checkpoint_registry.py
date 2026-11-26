@@ -1,9 +1,4 @@
-"""Checkpoint Registry: ánh xạ tổ hợp modality -> file .pth, tự nhận diện kiến trúc và cache model.
-
-Kiến trúc được suy ra từ chính state_dict nên không cần sửa code khi copy thêm checkpoint:
-  * `MultiStrategyFusionModel` (ml_core/fusion_model.py)  - khoá `dna_proj.*`, `bio_geom_upsample.*`
-  * `RouterExpertCorrection`  (router_expert_model.py)    - khoá `dna_projection.*`, `router.*`
-"""
+"""Checkpoint Registry: ánh xạ tổ hợp modality -> file .pth của TriMVPP, kiểm tra và cache model đã nạp."""
 from __future__ import annotations
 
 import logging
@@ -15,38 +10,36 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 from app.core.config import settings
-from app.core.constants import BIO_COLUMN_SETS, GEOM_COLUMNS, MODALITY_ORDER
+from app.core.constants import BIO_COLUMNS, GEOM_COLUMNS, MODALITY_ORDER
 from app.core.errors import (
     CheckpointIncompatibleError,
     CheckpointMissingError,
     NoModalitySelectedError,
     UnsupportedCombinationError,
 )
-from app.ml_core.fusion_model import MultiStrategyFusionModel
-from app.services.router_expert_model import RouterExpertCorrection
+from app.ml_core.trimvpp_model import TriMVPP
 
 logger = logging.getLogger("app.services.checkpoint_registry")
 
+ARCHITECTURE = "TriMVPP"
 VALID_TOGGLE_KEYS = ("111", "110", "101", "011", "100", "010", "001")
 
 
 def _key_to_modalities(key: str) -> Tuple[str, ...]:
-    """'101' -> (dna, bio, geom); 'dna,prot,bio' -> (dna, prot, bio)."""
-    key = key.strip().lower()
-    if len(key) == 3 and set(key) <= {"0", "1"}:
-        selected = set()
-        if key[0] == "1":
-            selected.add("dna")
-        if key[1] == "1":
-            selected.add("prot")
-        if key[2] == "1":
-            selected.update({"bio", "geom"})
-    else:
-        selected = {part.strip() for part in key.replace("+", ",").split(",") if part.strip()}
-        unknown = selected - set(MODALITY_ORDER)
-        if unknown:
-            raise ValueError(f"Unknown modality in MODEL_CHECKPOINT_REGISTRY key '{key}': {sorted(unknown)}")
+    """'101' -> (dna, bio, geom)."""
+    key = key.strip()
+    if key not in VALID_TOGGLE_KEYS:
+        raise ValueError(f"Invalid combination key '{key}'; expected one of {', '.join(VALID_TOGGLE_KEYS)}.")
+    selected = {"dna"} if key[0] == "1" else set()
+    if key[1] == "1":
+        selected.add("prot")
+    if key[2] == "1":
+        selected.update({"bio", "geom"})
     return tuple(m for m in MODALITY_ORDER if m in selected)
+
+
+def _branches(modalities: Tuple[str, ...]) -> Tuple[str, ...]:
+    return tuple(b for b, m in (("dna", "dna"), ("protein", "prot"), ("bio", "bio")) if m in modalities)
 
 
 def resolve_device() -> torch.device:
@@ -67,124 +60,22 @@ class LoadedModel:
     tag: str  # định danh checkpoint, dùng làm khoá cache trong bảng predictions
     path: Path
     device: torch.device
+    test_mcc: Optional[float] = None
 
     @property
     def tabular_columns(self) -> List[str]:
         return self.bio_columns + self.geom_columns
 
-    def forward_logit(
-        self,
-        dna: Optional[torch.Tensor],
-        prot: Optional[torch.Tensor],
-        tabular: Optional[torch.Tensor],
-    ) -> torch.Tensor:
-        """dna/prot: (B, D) vector delta E_alt - E_ref; tabular: (B, n_bio + n_geom) đã chuẩn hoá."""
-        n_bio = len(self.bio_columns)
-        bio = tabular[:, :n_bio] if tabular is not None and n_bio else None
-        geom = tabular[:, n_bio:] if tabular is not None and self.geom_columns else None
-        if self.architecture == "RouterExpertCorrection":
-            return self.model(dna, prot, bio, geom).reshape(-1)
-        return self.model(
-            v_dna=dna if "dna" in self.modalities else None,
-            v_prot=prot if "prot" in self.modalities else None,
-            bio_features=bio,
-            geom_features=geom,
-        ).reshape(-1)
+    def forward_logit(self, **inputs: torch.Tensor) -> torch.Tensor:
+        """Đầu vào đúng như TriMVPP.forward; trả logit (B,)."""
+        return self.model(**inputs).reshape(-1)
 
 
-def _extract_state_dict(ckpt: Any) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
-    meta: Dict[str, Any] = {}
-    if isinstance(ckpt, dict):
-        for key in ("model_state_dict", "state_dict"):
-            if isinstance(ckpt.get(key), dict):
-                meta = {k: v for k, v in ckpt.items() if k != key}
-                ckpt = ckpt[key]
-                break
-    if not isinstance(ckpt, dict) or not all(hasattr(v, "shape") for v in ckpt.values()):
-        raise ValueError("file does not contain a state_dict")
-    state = {(k[7:] if k.startswith("module.") else k): v for k, v in ckpt.items()}
-    return state, meta
-
-
-def _split_tabular(total_dim: int, modalities: Tuple[str, ...], path: Path) -> Tuple[List[str], List[str]]:
-    geom_cols = list(GEOM_COLUMNS) if "geom" in modalities else []
-    bio_dim = total_dim - len(geom_cols)
-    if "bio" not in modalities:
-        if bio_dim != 0:
-            raise CheckpointIncompatibleError(
-                f"{path.name}: tabular input has {total_dim} dims but the requested combination has no Bio branch."
-            )
-        return [], geom_cols
-    if bio_dim not in BIO_COLUMN_SETS:
-        raise CheckpointIncompatibleError(
-            f"{path.name}: Bio branch has {bio_dim} dims (tabular {total_dim} - geometry {len(geom_cols)}); "
-            f"supported Bio dims are {sorted(BIO_COLUMN_SETS)}."
-        )
-    return list(BIO_COLUMN_SETS[bio_dim]), geom_cols
-
-
-def _build_router_expert(state, meta, modalities, path) -> Tuple[torch.nn.Module, List[str], List[str]]:
-    if not {"dna", "prot", "bio"} <= set(modalities):
-        raise CheckpointIncompatibleError(
-            f"{path.name} is a RouterExpertCorrection checkpoint, which always needs DNA + Protein + Bio; "
-            f"it cannot serve the combination {list(modalities)}."
-        )
-    bio_cols, geom_cols = _split_tabular(state["biological_projection.0.weight"].shape[1], modalities, path)
-    hparams = meta.get("hparams") or meta.get("config") or {}
-    model = RouterExpertCorrection(
-        dna_dim=state["dna_projection.0.weight"].shape[1],
-        protein_dim=state["protein_projection.0.weight"].shape[1],
-        biological_dim=state["biological_projection.0.weight"].shape[1],
-        embedding_dim=state["dna_projection.0.weight"].shape[0],
-        expert_hidden_dim=state["dna_expert.input_projection.0.weight"].shape[0],
-        router_hidden_dim=state["router.0.weight"].shape[0],
-        correction_hidden_dim=state["correction.0.weight"].shape[0],
-        router_temperature=float(hparams.get("router_temperature", settings.ROUTER_TEMPERATURE)),
-    )
-    return model, bio_cols, geom_cols
-
-
-def _build_multi_strategy(state, meta, modalities, path) -> Tuple[torch.nn.Module, List[str], List[str]]:
-    """Dựng MultiStrategyFusionModel nguyên bản; chỉ truyền những tham số đọc được từ checkpoint."""
-    kwargs: Dict[str, Any] = {"active_modalities": list(modalities)}
-    has_dna, has_prot = "dna_proj.0.weight" in state, "prot_proj.0.weight" in state
-    if has_dna != ("dna" in modalities) or has_prot != ("prot" in modalities):
-        raise CheckpointIncompatibleError(
-            f"{path.name} was trained with dna={has_dna}, prot={has_prot}, "
-            f"which does not match the requested combination {list(modalities)}."
-        )
-    seq_key = "dna_proj.0.weight" if has_dna else ("prot_proj.0.weight" if has_prot else None)
-    kwargs["dna_in_dim"] = state["dna_proj.0.weight"].shape[1] if has_dna else 0
-    kwargs["prot_in_dim"] = state["prot_proj.0.weight"].shape[1] if has_prot else 0
-    if seq_key:
-        kwargs["fusion_dim"] = state[seq_key].shape[0]
-
-    bio_cols: List[str] = []
-    geom_cols: List[str] = []
-    has_tabular = "bio_geom_upsample.0.weight" in state
-    if has_tabular != bool({"bio", "geom"} & set(modalities)):
-        raise CheckpointIncompatibleError(
-            f"{path.name}: Bio/Geom branch presence does not match the requested combination {list(modalities)}."
-        )
-    if has_tabular:
-        weight = state["bio_geom_upsample.0.weight"]
-        bio_cols, geom_cols = _split_tabular(weight.shape[1], modalities, path)
-        kwargs["bio_upsample_dim"] = weight.shape[0]
-        if bio_cols:
-            kwargs["bio_in_dim"] = len(bio_cols)
-
-    # fusion_strategy: ưu tiên metadata lưu kèm, sau đó suy ra từ tham số; không thấy gì thì để mặc định của class.
-    strategy = (meta.get("hparams") or meta.get("config") or {}).get("fusion_strategy") or meta.get("fusion_strategy")
-    if not strategy:
-        if "attn_p2d.in_proj_weight" in state:
-            strategy = "cross_attention"
-        elif "modality_embed" in state:
-            strategy = "transformer"
-        elif "gate.weight" in state:
-            strategy = "gating"
-    if strategy:
-        kwargs["fusion_strategy"] = strategy
-    return MultiStrategyFusionModel(**kwargs), bio_cols, geom_cols
+def _read_state_dict(path: Path) -> Dict[str, torch.Tensor]:
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(state, dict) or not all(hasattr(v, "shape") for v in state.values()):
+        raise ValueError("file does not contain a raw state_dict")
+    return state
 
 
 class CheckpointRegistry:
@@ -197,6 +88,7 @@ class CheckpointRegistry:
         self._thresholds = {
             _key_to_modalities(k): float(v) for k, v in settings.MODEL_DECISION_THRESHOLDS.items()
         }
+        self._test_mcc = {_key_to_modalities(k): float(v) for k, v in settings.MODEL_TEST_MCC.items()}
 
     def get(self, modalities: Tuple[str, ...]) -> LoadedModel:
         modalities = tuple(m for m in MODALITY_ORDER if m in modalities)
@@ -227,37 +119,31 @@ class CheckpointRegistry:
             return self._cache[cache_key]
 
     def _load(self, path: Path, modalities: Tuple[str, ...]) -> LoadedModel:
+        if modalities not in self._thresholds:
+            raise CheckpointIncompatibleError(f"No decision threshold configured for {list(modalities)}.")
         device = resolve_device()
         try:
-            state, meta = _extract_state_dict(torch.load(path, map_location="cpu", weights_only=False))
-            if "biological_projection.0.weight" in state and "router.0.weight" in state:
-                architecture = "RouterExpertCorrection"
-                model, bio_cols, geom_cols = _build_router_expert(state, meta, modalities, path)
-            elif "classifier_hidden.0.weight" in state and "output_head.weight" in state:
-                architecture = "MultiStrategyFusionModel"
-                model, bio_cols, geom_cols = _build_multi_strategy(state, meta, modalities, path)
-            else:
-                raise ValueError("state_dict matches neither MultiStrategyFusionModel nor RouterExpertCorrection")
-            model.load_state_dict(state, strict=True)
-        except CheckpointIncompatibleError:
-            raise
+            model = TriMVPP(_branches(modalities))
+            model.load_state_dict(_read_state_dict(path), strict=True)
         except Exception as exc:
             raise CheckpointIncompatibleError(f"Cannot load checkpoint {path.name}: {exc}") from exc
 
         model.to(device).eval()
-        threshold = float(meta.get("threshold", self._thresholds.get(modalities, 0.5)))
-        logger.info("Loaded checkpoint %s as %s for %s (bio=%d, geom=%d, threshold=%s) on %s",
-                    path.name, architecture, list(modalities), len(bio_cols), len(geom_cols), threshold, device)
+        has_bio = "bio" in modalities
+        threshold = self._thresholds[modalities]
+        logger.info("Loaded checkpoint %s as %s for %s (threshold=%s) on %s",
+                    path.name, ARCHITECTURE, list(modalities), threshold, device)
         return LoadedModel(
             model=model,
-            architecture=architecture,
+            architecture=ARCHITECTURE,
             modalities=modalities,
-            bio_columns=bio_cols,
-            geom_columns=geom_cols,
+            bio_columns=list(BIO_COLUMNS) if has_bio else [],
+            geom_columns=list(GEOM_COLUMNS) if has_bio else [],
             threshold=threshold,
             tag=f"{path.name}@{int(path.stat().st_mtime)}",
             path=path,
             device=device,
+            test_mcc=self._test_mcc.get(modalities),
         )
 
     def status(self) -> List[Dict[str, Any]]:
@@ -268,6 +154,8 @@ class CheckpointRegistry:
                 "active_modalities": list(modalities),
                 "checkpoint": str(path),
                 "status": "available" if path.is_file() else "checkpoint_missing",
+                "decision_threshold": self._thresholds.get(modalities),
+                "test_mcc": self._test_mcc.get(modalities),
             })
         return rows
 

@@ -32,7 +32,12 @@ def ensure_safetensors(snapshot_dir: str) -> None:
     from safetensors.torch import save_file
 
     state = torch.load(source, map_location="cpu", weights_only=True)
-    state = {k: v.contiguous() for k, v in state.items()}
+    # safetensors không nhận tensor dùng chung bộ nhớ (ESM-1b: word_embeddings và lm_head.decoder).
+    seen = set()
+    for key, value in state.items():
+        pointer = value.untyped_storage().data_ptr()
+        state[key] = value.clone() if pointer in seen else value.contiguous()
+        seen.add(pointer)
     if os.path.lexists(target):
         os.remove(target)
     save_file(state, target, metadata={"format": "pt"})

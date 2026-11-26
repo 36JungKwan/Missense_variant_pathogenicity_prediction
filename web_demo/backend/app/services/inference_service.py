@@ -1,4 +1,5 @@
-"""Điều phối suy luận: VEP -> gatekeeper -> đặc trưng -> checkpoint -> SHAP -> PostgreSQL."""
+"""Điều phối suy luận: VEP -> gatekeeper -> đặc trưng -> checkpoint -> Integrated Gradients -> PostgreSQL.
+Attention map chỉ tính khi mở trang XAI (không lưu)."""
 from __future__ import annotations
 
 import logging
@@ -22,13 +23,13 @@ from app.core.constants import (
 from app.core.errors import InvalidVariantError, NonMissenseVariantError, PipelineError
 from app.core.log import format_timings, run_in_context, stage_scope, timed_stage
 from app.models.variant import InferenceFeature, Prediction, Variant
-from app.schemas.common import ModelResults, RBNetScore, ShapItem, SotaScores
-from app.schemas.single import InferenceMeta, SingleVariantRequest, SingleVariantResponse
+from app.schemas.common import AttentionMaps, IgAnalysis, ModelResults, SotaScores, TriMVPPScore
+from app.schemas.single import InferenceMeta, SingleVariantRequest, SingleVariantResponse, XaiResponse
+from app.ml_core.fm_extractor import TOKEN_DIM, WINDOW_TOKENS, TokenWindow
 from app.services import ml_engine
 from app.services.checkpoint_registry import LoadedModel, checkpoint_registry
 from app.services.feature_pipeline import (
     EXTRACTOR_TAG,
-    Embedding,
     VariantFeatures,
     build_features,
     build_features_batch,
@@ -138,10 +139,13 @@ def _store_features(db: Session, key: VariantKey, record: VepRecord, features: V
     _upsert(db, InferenceFeature, {
         "variant_id": variant_id,
         "extractor_tag": EXTRACTOR_TAG,
-        "emb_dna_ref": features.dna_ref,
-        "emb_dna_alt": features.dna_alt,
-        "emb_pro_ref": features.prot_ref,
-        "emb_pro_alt": features.prot_alt,
+        "emb_dna_ref": features.dna.center_ref.astype(np.float32),
+        "emb_dna_alt": features.dna.center_alt.astype(np.float32),
+        "emb_pro_ref": features.prot.center_ref.astype(np.float32),
+        "emb_pro_alt": features.prot.center_alt.astype(np.float32),
+        "tok_dna": features.dna.hidden.astype("<f2").tobytes(),
+        "tok_pro": features.prot.hidden.astype("<f2").tobytes(),
+        "tok_mask": np.stack([features.dna.mask, features.prot.mask]).astype(np.uint8).tobytes(),
         "raw_features": features.raw,
         "annotation": {
             "transcript": record.transcript,
@@ -164,10 +168,10 @@ def _load_stored(db: Session, variant_id: str) -> Tuple[Variant, InferenceFeatur
     return variant, row
 
 
-def _annotate_with_overlap(key: VariantKey) -> Tuple[VepRecord, Optional[Embedding], Optional[Dict[str, float]]]:
+def _annotate_with_overlap(key: VariantKey) -> Tuple[VepRecord, Optional[TokenWindow], Optional[Dict[str, float]]]:
     """VEP (tiến trình con) chạy song song với NT-DNA + SpliceAI, vốn chỉ cần toạ độ biến thể."""
     vep_future = _vep_executor.submit(run_in_context(annotate_variants), [key])
-    dna: Optional[Embedding] = None
+    dna: Optional[TokenWindow] = None
     spliceai: Optional[Dict[str, float]] = None
     dna_error: Optional[InvalidVariantError] = None
     try:
@@ -243,12 +247,15 @@ def prepare_features_batch(db: Session, keys: Sequence[VariantKey], prefetched: 
 
 
 def _to_features(row: InferenceFeature) -> VariantFeatures:
+    masks = np.frombuffer(row.tok_mask, dtype=np.uint8).reshape(2, 2, WINDOW_TOKENS).astype(bool)
+
+    def window(blob: bytes, mask: np.ndarray) -> TokenWindow:
+        return TokenWindow(np.frombuffer(blob, dtype="<f2").reshape(2, WINDOW_TOKENS, TOKEN_DIM), mask)
+
     return VariantFeatures(
         variant_id=row.variant_id,
-        dna_ref=np.asarray(row.emb_dna_ref, dtype=np.float32),
-        dna_alt=np.asarray(row.emb_dna_alt, dtype=np.float32),
-        prot_ref=np.asarray(row.emb_pro_ref, dtype=np.float32),
-        prot_alt=np.asarray(row.emb_pro_alt, dtype=np.float32),
+        dna=window(row.tok_dna, masks[0]),
+        prot=window(row.tok_pro, masks[1]),
         raw=dict(row.raw_features),
         warnings=list((row.annotation or {}).get("warnings", [])),
     )
@@ -268,9 +275,9 @@ def _response(
         gene=variant.gene or "UNKNOWN",
         consequence=_display_consequence(variant),
         clinvar_ground_truth=normalize_clinvar_label(variant.clinvar_ground_truth),
-        results=ModelResults(rb_net=RBNetScore(probability=prediction.rb_net_prob, label=prediction.classification)),
+        results=ModelResults(trimvpp=TriMVPPScore(probability=prediction.trimvpp_prob, label=prediction.classification)),
         sota=SotaScores(alphamissense=prediction.sota_alphamissense, revel=prediction.sota_revel),
-        shap_analysis=[ShapItem(**item) for item in prediction.shap_values],
+        ig_analysis=IgAnalysis(**prediction.ig_values),
         meta=InferenceMeta(
             is_cache_hit=is_cache_hit,
             computation_time_ms=max(1, int((time.perf_counter() - started) * 1000)),
@@ -279,6 +286,7 @@ def _response(
             checkpoint=loaded.path.name,
             architecture=loaded.architecture,
             decision_threshold=loaded.threshold,
+            test_mcc=loaded.test_mcc,
             warnings=warnings,
             timings_ms=dict(timings),
         ),
@@ -333,7 +341,7 @@ def run_single_variant_inference(
             annotation = feature_row.annotation or {}
             warnings = list(features.warnings) + _sota_warnings(annotation)
 
-            # 3) Suy luận Pure DL + Shapley.
+            # 3) Suy luận TriMVPP + Integrated Gradients.
             output = ml_engine.predict(loaded, features)
 
             # 4) Upsert bảng predictions theo unique index ix_variant_mask (variant_id, ablation_mask):
@@ -341,11 +349,11 @@ def run_single_variant_inference(
             values = {
                 "variant_id": variant_id,
                 "ablation_mask": mask,
-                "rb_net_prob": output.probability,
+                "trimvpp_prob": output.probability,
                 "classification": output.label,
                 "sota_alphamissense": annotation.get("alphamissense"),
                 "sota_revel": annotation.get("revel"),
-                "shap_values": output.shap_items,
+                "ig_values": output.ig,
                 "model_tag": _prediction_tag(loaded),
             }
             with timed_stage("db"):
@@ -359,3 +367,20 @@ def run_single_variant_inference(
         finally:
             logger.info("inference variant=%s mask=%d cache=%s total=%dms %s", variant_id, mask, cache_state,
                         (time.perf_counter() - started) * 1000, format_timings(timings))
+
+
+def run_xai(db: Session, request: SingleVariantRequest) -> XaiResponse:
+    """Dự đoán + IG (đọc cache predictions hoặc tính mới), rồi tính attention map từ đặc trưng đã lưu."""
+    result = run_single_variant_inference(db=db, request=request)
+    loaded = resolve_model(result.meta.ablation_mask)
+    attention = None
+    if len(loaded.model.cross_layers) > 0:
+        with stage_scope() as timings:
+            with timed_stage("db"):
+                row = _stored_features(db, result.variant_id)
+            if row is None:
+                raise PipelineError(f"Stored features for {result.variant_id} disappeared during the XAI request.")
+            maps = ml_engine.attention(loaded, _to_features(row))
+        attention = AttentionMaps(**maps)
+        result.meta.timings_ms.update({k: v for k, v in timings.items() if k == "attn"})
+    return XaiResponse(**result.model_dump(), attention=attention)

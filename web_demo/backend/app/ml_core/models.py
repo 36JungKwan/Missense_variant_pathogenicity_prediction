@@ -1,4 +1,4 @@
-"""Nạp Foundation Model dạng Masked LM (NT-v1 500M, ESM2 650M) và ánh xạ vị trí đột biến -> token.
+"""Nạp Foundation Model dạng Masked LM (NT-v1 500M, ESM-1b 650M) và ánh xạ vị trí đột biến -> token.
 
 Giữ nguyên các shim tương thích để remote code (trust_remote_code) đời cũ chạy được trên transformers mới.
 """

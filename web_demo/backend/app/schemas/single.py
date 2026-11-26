@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 from app.core.constants import ClassificationLabel
-from app.schemas.common import ModelResults, SotaScores, ShapItem
+from app.schemas.common import AttentionMaps, IgAnalysis, ModelResults, SotaScores
 
 
 class SingleVariantRequest(BaseModel):
@@ -25,8 +25,9 @@ class InferenceMeta(BaseModel):
     checkpoint: Optional[str] = None
     architecture: Optional[str] = None
     decision_threshold: Optional[float] = None
+    test_mcc: Optional[float] = None  # MCC của tổ hợp này trên tập Test nội bộ
     warnings: List[str] = []
-    # Thời gian từng chặng (ms): vep, spliceai, fm_dna, fm_prot, geom, norm, shap, db
+    # Thời gian từng chặng (ms): vep, spliceai, fm_dna, fm_prot, geom, norm, ig, attn, db
     timings_ms: Dict[str, int] = {}
 
 
@@ -37,5 +38,10 @@ class SingleVariantResponse(BaseModel):
     clinvar_ground_truth: ClassificationLabel
     results: ModelResults
     sota: SotaScores
-    shap_analysis: List[ShapItem]
+    ig_analysis: IgAnalysis
     meta: InferenceMeta
+
+
+class XaiResponse(SingleVariantResponse):
+    # None: tổ hợp chỉ một nhánh (không có cross-attention).
+    attention: Optional[AttentionMaps] = None
