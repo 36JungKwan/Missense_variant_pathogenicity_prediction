@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title RB-Net System Launcher
+title TriMVPP System Launcher
 color 0A
 
 set "ROOT=%~dp0"
@@ -8,7 +8,7 @@ set "VENV_PY=%ROOT%backend\.venv\Scripts\python.exe"
 cd /d "%ROOT%"
 
 echo ======================================================================
-echo    KHỞI ĐỘNG HỆ THỐNG PHÂN TÍCH BIẾN THỂ RB-NET (AIP491 CAPSTONE)
+echo    KHỞI ĐỘNG HỆ THỐNG PHÂN TÍCH BIẾN THỂ TRIMVPP (AIP491 CAPSTONE)
 echo ======================================================================
 echo.
 
@@ -34,13 +34,13 @@ echo.
 
 :: 2. Backend FastAPI - không dùng --reload: mỗi lần reload sẽ nạp lại ~2,3 GB Foundation Models lên GPU.
 echo [2/3] Đang khởi động Backend FastAPI (Port 8000)...
-start "RB-Net Backend (FastAPI)" cmd /k "cd /d "%ROOT%backend" && set PYTHONUTF8=1&& "%VENV_PY%" -m uvicorn app.main:app --port 8000"
+start "TriMVPP Backend (FastAPI)" cmd /k "cd /d "%ROOT%backend" && set PYTHONUTF8=1&& "%VENV_PY%" -m uvicorn app.main:app --port 8000"
 echo    * Backend đang nạp Foundation Models lên GPU (khoảng 15-30 giây) trên cửa sổ riêng.
 echo.
 
 :: 3. Frontend Vite + React
 echo [3/3] Đang khởi động Frontend React + Vite (Port 5173)...
-start "RB-Net Frontend (React/Vite)" cmd /k "cd /d "%ROOT%frontend" && npm run dev"
+start "TriMVPP Frontend (React/Vite)" cmd /k "cd /d "%ROOT%frontend" && npm run dev"
 echo    * Frontend đã được mở trên cửa sổ riêng (http://localhost:5173).
 echo.
 

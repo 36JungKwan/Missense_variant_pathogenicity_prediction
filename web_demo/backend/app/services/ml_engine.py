@@ -1,7 +1,8 @@
-"""Suy luận Pure DL + giải thích Shapley trên checkpoint đã nạp từ registry."""
+"""Suy luận TriMVPP + giải thích Integrated Gradients (mỗi lần dự đoán) và attention map (khi mở trang XAI)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -9,7 +10,9 @@ import torch
 
 from app.core.config import settings
 from app.core.constants import PredictionLabel
+from app.core.errors import FeatureArtifactMissingError
 from app.core.log import timed_stage
+from app.ml_core import xai
 from app.services.checkpoint_registry import LoadedModel
 from app.services.feature_pipeline import VariantFeatures, normalize_tabular
 
@@ -54,111 +57,85 @@ def _feature_meta(column: str) -> Tuple[str, str]:
 class PredictionOutput:
     probability: float
     label: PredictionLabel
-    shap_items: List[Dict[str, Any]]
+    ig: Dict[str, Any]
 
 
-def _shapley_values(value_fn, n_players: int, n_permutations: int, seed: int = 0) -> np.ndarray:
-    """Ước lượng Shapley bằng lấy mẫu hoán vị đối xứng (antithetic); thoả tính hiệu quả:
-    tổng đóng góp = f(đủ đặc trưng) - f(baseline). `value_fn` nhận ma trận mask (rows, n_players)."""
-    rng = np.random.default_rng(seed)
-    orders: List[np.ndarray] = []
-    for _ in range(max(1, n_permutations // 2)):
-        order = rng.permutation(n_players)
-        orders.extend([order, order[::-1]])
-
-    masks = np.zeros((len(orders), n_players + 1, n_players), dtype=np.float32)
-    for row, order in enumerate(orders):
-        for step, player in enumerate(order):
-            masks[row, step + 1:, player] = 1.0
-    values = value_fn(masks.reshape(-1, n_players)).reshape(len(orders), n_players + 1)
-
-    phi = np.zeros(n_players, dtype=np.float64)
-    for row, order in enumerate(orders):
-        phi[order] += values[row, 1:] - values[row, :-1]
-    return phi / len(orders)
+_baseline_lock = threading.Lock()
+_baselines: Dict[str, Dict[str, torch.Tensor]] = {}
 
 
-@torch.inference_mode()
-def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
+def ig_baseline(device: torch.device) -> Dict[str, torch.Tensor]:
+    """Baseline IG của nhóm (train3, 256 mẫu, seed 2026), nạp một lần cho mỗi thiết bị."""
+    with _baseline_lock:
+        if str(device) not in _baselines:
+            path = settings.resolve_path(settings.IG_BASELINE_PATH)
+            if not path.is_file():
+                raise FeatureArtifactMissingError(
+                    f"Integrated Gradients baseline '{path}' is missing. Copy ig_baseline_train3_seed2026.pt "
+                    "(notebook 19, module06) to that path.",
+                    status="ig_baseline_missing", expected_path=str(path),
+                )
+            _baselines[str(device)] = {k: v.to(device) for k, v in xai.load_baseline(path).items()}
+        return _baselines[str(device)]
+
+
+def _model_inputs(loaded: LoadedModel, features: VariantFeatures) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    """Đầu vào batch = 1 của TriMVPP: (giá trị được giải thích, mask cố định)."""
     device = loaded.device
-    mods = loaded.modalities
-    needs_seq = loaded.architecture == "RouterExpertCorrection"
+    values: Dict[str, torch.Tensor] = {}
+    masks: Dict[str, torch.Tensor] = {}
+    for name, modality, window in (("dna", "dna", features.dna), ("protein", "prot", features.prot)):
+        if modality not in loaded.modalities:
+            continue
+        values[f"token_{name}"] = torch.from_numpy(np.array(window.hidden, dtype=np.float32)).unsqueeze(0).to(device)
+        masks[f"mask_{name}"] = torch.from_numpy(np.array(window.mask, dtype=bool)).unsqueeze(0).to(device)
+    if loaded.tabular_columns:
+        tabular = torch.from_numpy(normalize_tabular(features.raw, loaded.bio_columns, loaded.geom_columns))
+        tabular = tabular.to(device=device, dtype=torch.float32).unsqueeze(0)
+        n_bio = len(loaded.bio_columns)
+        values["bio"], values["geom"] = tabular[:, :n_bio], tabular[:, n_bio:]
+    return values, masks
 
-    dna = torch.tensor(features.dna_alt - features.dna_ref, device=device) if ("dna" in mods or needs_seq) else None
-    prot = torch.tensor(features.prot_alt - features.prot_ref, device=device) if ("prot" in mods or needs_seq) else None
-    columns = loaded.tabular_columns
-    tabular_np = normalize_tabular(features.raw, loaded.bio_columns, loaded.geom_columns) if columns else None
-    tabular = torch.tensor(tabular_np, device=device) if columns else None
 
-    def forward(dna_b, prot_b, tab_b) -> torch.Tensor:
-        return loaded.forward_logit(dna_b, prot_b, tab_b).float()
+def _raw_display(features: VariantFeatures, column: str) -> Tuple[Optional[float], Optional[str]]:
+    raw_value = features.raw.get(column)
+    if raw_value is not None:
+        return float(raw_value), None
+    if column in _POPULATION_AF_COLUMNS:
+        # normalizer điền 0 cho tần số thiếu (giống lúc train): biến thể vắng mặt trong quần thể.
+        return None, "absent in population (AF = 0)"
+    return None, "n/a (imputed)"
 
-    with timed_stage("shap"):
-        logit = forward(
-            dna[None] if dna is not None else None,
-            prot[None] if prot is not None else None,
-            tabular[None] if tabular is not None else None,
+
+def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
+    """Xác suất Pathogenic + IG full_prediction (logit trước sigmoid, baseline train3)."""
+    values, masks = _model_inputs(loaded, features)
+    with timed_stage("ig"):
+        ig = xai.explain_ig(
+            loaded.model, values, masks, ig_baseline(loaded.device),
+            bio_columns=loaded.bio_columns, geom_columns=loaded.geom_columns,
+            n_steps=settings.IG_STEPS, retry_steps=settings.IG_RETRY_STEPS,
+            retry_threshold=settings.IG_RETRY_THRESHOLD, internal_batch_size=settings.IG_INTERNAL_BATCH,
         )
-        probability = float(torch.sigmoid(logit)[0])
+    for item in ig["features"]:
+        item["name"], item["description"] = _feature_meta(item["feature"])
+        item["raw_value"], item["raw_note"] = _raw_display(features, item["feature"])
+    ig["features"].sort(key=lambda item: abs(item["signed"]), reverse=True)
 
-    # Người chơi Shapley: khối embedding DNA, khối embedding Protein, và từng đặc trưng bảng.
-    # Baseline = 0: delta embedding bằng 0 (không đổi) và giá trị trung tâm của tập train sau chuẩn hoá.
-    players: List[Tuple[str, Optional[str]]] = []
-    if dna is not None:
-        players.append(("dna_block", None))
-    if prot is not None:
-        players.append(("prot_block", None))
-    players.extend(("tabular", column) for column in columns)
-    n_seq = len(players) - len(columns)
-
-    def value_fn(masks: np.ndarray) -> np.ndarray:
-        outputs = []
-        chunk = settings.SHAP_EVAL_CHUNK
-        for start in range(0, len(masks), chunk):
-            m = torch.tensor(masks[start:start + chunk], device=device)
-            col = 0
-            dna_b = prot_b = tab_b = None
-            if dna is not None:
-                dna_b = m[:, col:col + 1] * dna[None]
-                col += 1
-            if prot is not None:
-                prot_b = m[:, col:col + 1] * prot[None]
-                col += 1
-            if tabular is not None:
-                tab_b = m[:, n_seq:] * tabular[None]
-            outputs.append(forward(dna_b, prot_b, tab_b).cpu().numpy())
-        return np.concatenate(outputs)
-
-    with timed_stage("shap"):
-        phi = _shapley_values(value_fn, len(players), settings.SHAP_PERMUTATIONS)
-
-    items: List[Dict[str, Any]] = []
-    for (kind, column), contribution in zip(players, phi):
-        if kind == "dna_block":
-            feature, name = "NT_v1_DNA_Embedding", "DNA Foundation Model (NT-v1 500M)"
-            description = "Joint contribution of the 1280-d DNA embedding delta (E_alt - E_ref)"
-        elif kind == "prot_block":
-            feature, name = "ESM2_Protein_Embedding", "Protein Foundation Model (ESM-2 650M)"
-            description = "Joint contribution of the 1280-d protein embedding delta (E_alt - E_ref)"
-        else:
-            feature = column
-            name, description = _feature_meta(column)
-            raw_value = features.raw.get(column)
-            if raw_value is not None:
-                shown = f"{raw_value:.4g}"
-            elif column in _POPULATION_AF_COLUMNS:
-                # normalizer điền 0 cho tần số thiếu (giống lúc train): biến thể vắng mặt trong quần thể.
-                shown = "absent in population (AF = 0)"
-            else:
-                shown = "n/a (imputed)"
-            description += f" | raw={shown}"
-        items.append({
-            "feature": feature,
-            "name": name,
-            "contribution_value": round(float(contribution), 4),
-            "description": description,
-        })
-    items.sort(key=lambda item: abs(item["contribution_value"]), reverse=True)
-
+    probability = float(torch.sigmoid(torch.tensor(ig["logit"])))
     label: PredictionLabel = "Pathogenic" if probability >= loaded.threshold else "Benign"
-    return PredictionOutput(probability=round(probability, 4), label=label, shap_items=items)
+    return PredictionOutput(probability=round(probability, 4), label=label, ig=ig)
+
+
+def attention(loaded: LoadedModel, features: VariantFeatures) -> Optional[Dict[str, Any]]:
+    """Attention của 3 lớp x 8 head (tính khi cần, không lưu). None với tổ hợp một nhánh."""
+    if len(loaded.model.cross_layers) == 0:
+        return None
+    values, masks = _model_inputs(loaded, features)
+    with timed_stage("attn"):
+        maps = xai.attention_maps(loaded.model, values, masks,
+                                  bio_columns=loaded.bio_columns, geom_columns=loaded.geom_columns)
+    for layer in maps["layers"]:
+        for entry in layer["maps"]:
+            entry["weights"] = np.round(entry["weights"].astype(np.float64), 5).tolist()
+    return maps

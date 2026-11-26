@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, BigInteger, SmallInteger, DateTime, ForeignKey, Index
+from sqlalchemy import LargeBinary, Column, String, Float, BigInteger, SmallInteger, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
@@ -33,14 +33,14 @@ class Prediction(Base):
     # Giá trị từ 0 đến 15 đại diện cho các tổ hợp Tắt/Bật tính năng
     ablation_mask = Column(SmallInteger, nullable=False)
     
-    rb_net_prob = Column(Float, nullable=False)
+    trimvpp_prob = Column(Float, nullable=False)
     classification = Column(String(16), nullable=False)
     
     sota_alphamissense = Column(Float, nullable=True)
     sota_revel = Column(Float, nullable=True)
     
-    # Lưu toàn bộ cục phân tích SHAP ứng với mask này
-    shap_values = Column(JSONB, nullable=False)
+    # Integrated Gradients (full_prediction) của checkpoint ứng với mask này: theo nhánh, token, đặc trưng
+    ig_values = Column(JSONB, nullable=False)
 
     # Định danh checkpoint đã sinh ra dòng này ("<file>.pth@<mtime>"); NULL = dữ liệu seed/mock cũ.
     model_tag = Column(String(128), nullable=True)
@@ -53,7 +53,7 @@ class Prediction(Base):
     )
 
 class InferenceFeature(Base):
-    """Đặc trưng thật của pipeline Pure DL (NT-v1 500M / ESM2 650M, 1280 chiều) cho mỗi biến thể.
+    """Đặc trưng thật của pipeline Pure DL (NT-v1 500M / ESM-1b 650M, 1280 chiều) cho mỗi biến thể.
 
     Lưu lại để đổi tổ hợp ablation không phải chạy lại VEP và Foundation Models.
     """
@@ -66,6 +66,12 @@ class InferenceFeature(Base):
     emb_dna_alt = Column(Vector(1280), nullable=False)
     emb_pro_ref = Column(Vector(1280), nullable=False)
     emb_pro_alt = Column(Vector(1280), nullable=False)
+
+    # emb_*: vector token tâm (cho geometry). tok_*: cửa sổ 33 token, float16 little-endian (2 allele, 33, 1280).
+    # tok_mask: uint8 (2 nhánh dna/prot, 2 allele, 33).
+    tok_dna = Column(LargeBinary, nullable=False)
+    tok_pro = Column(LargeBinary, nullable=False)
+    tok_mask = Column(LargeBinary, nullable=False)
 
     # Giá trị thô (chưa chuẩn hoá): 11 bio core + 9 SpliceAI + {dna,prot}_{LLR,LVD_L2,LVD_Cosine,LID,LVD_Relative}
     raw_features = Column(JSONB, nullable=False)

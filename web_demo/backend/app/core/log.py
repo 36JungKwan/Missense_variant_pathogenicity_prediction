@@ -19,7 +19,7 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id
 _timings_var: contextvars.ContextVar[Optional[Dict[str, int]]] = contextvars.ContextVar("stage_timings", default=None)
 
 # Thứ tự cố định khi in dòng tổng kết.
-STAGE_ORDER = ("vep", "spliceai", "fm_dna", "fm_prot", "geom", "norm", "shap", "db")
+STAGE_ORDER = ("vep", "spliceai", "fm_dna", "fm_prot", "geom", "norm", "ig", "attn", "db")
 
 T = TypeVar("T")
 

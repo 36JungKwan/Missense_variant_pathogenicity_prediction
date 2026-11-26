@@ -35,6 +35,11 @@ export function ablationStateToMask(state: AblationState): number {
   return computeAblationMask(ablationStateToFlags(state))
 }
 
+/** Khoá 3 bit của checkpoint (use_dna, use_prot, use_biogeom), ví dụ "101". */
+export function ablationStateToKey(state: AblationState): string {
+  return [state.dnaFeatures, state.proteinFeatures, state.bioGeomFeatures].map((on) => (on ? "1" : "0")).join("")
+}
+
 export function maskToAblationState(mask: number): AblationState {
   return { dnaFeatures: (mask & 8) !== 0, proteinFeatures: (mask & 4) !== 0, bioGeomFeatures: (mask & 3) !== 0 }
 }

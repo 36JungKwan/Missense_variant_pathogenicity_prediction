@@ -23,14 +23,14 @@ export const Home: React.FC = () => {
       title: "Single Variant Lookup",
       subtitle: "On-the-Fly Variant Inspection",
       description:
-        "Input GRCh38 genomic coordinates to trigger real-time pathogenicity classification by the proposed RB-Net Hybrid model with dynamic Ablation Toggles and SOTA benchmarks.",
+        "Input GRCh38 genomic coordinates to trigger real-time pathogenicity classification by the proposed TriMVPP model with dynamic Ablation Toggles and SOTA benchmarks.",
       icon: Activity,
       path: "/single",
       badge: "Real-time Inference",
       badgeVariant: "default" as const,
       color: "from-blue-600 to-indigo-600",
       accentBg: "bg-blue-50 text-blue-600 border-blue-200",
-      details: ["4-Block Feature Ablation Study", "ClinVar Ground Truth Validation", "SOTA Benchmarks (AlphaMissense, REVEL)"],
+      details: ["3-Branch Feature Ablation (7 configurations)", "ClinVar Ground Truth Validation", "SOTA Benchmarks (AlphaMissense, REVEL)"],
     },
     {
       title: "Batch VCF Screening",
@@ -43,20 +43,20 @@ export const Home: React.FC = () => {
       badgeVariant: "default" as const,
       color: "from-blue-600 to-sky-600",
       accentBg: "bg-blue-50 text-blue-600 border-blue-200",
-      details: ["Non-blocking 50-Variant Queue Stream", "Live Progress & Auto-Scroll", "ClinVar Ground Truth Benchmarking"],
+      details: ["Non-blocking Variant Stream", "Live Progress & Auto-Scroll", "ClinVar Ground Truth Benchmarking"],
     },
     {
       title: "XAI Feature Attribution",
-      subtitle: "Explainable AI (SHAP Waterfall)",
+      subtitle: "Integrated Gradients & Attention Maps",
       description:
-        "Visualize the exact contribution of each biological and spatial feature (LVD, SpliceAI, Spatial Structural Perturbation, Allele Frequency) to explain classification decisions.",
+        "Explain each prediction with Integrated Gradients over the DNA and protein token windows and the 28 biological, SpliceAI and geometry features, and inspect the cross-attention maps between branches.",
       icon: BarChart3,
       path: "/xai",
       badge: "Clinical Explainability",
       badgeVariant: "success" as const,
       color: "from-emerald-500 to-teal-600",
       accentBg: "bg-emerald-50 text-emerald-600 border-emerald-200",
-      details: ["Diverging / Waterfall Attribution Chart", "Positive/Negative Impact Decomposition", "Deep-linked Variant Context"],
+      details: ["IG by Branch, Feature and Token Position", "Cross-Attention Heatmaps per Layer and Head", "Deep-linked Variant Context"],
     },
   ]
 
@@ -76,12 +76,12 @@ export const Home: React.FC = () => {
           <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
             Variant Pathogenicity <br />
             <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-teal-300 bg-clip-text text-transparent">
-              Classification System (RB-Net)
+              Classification System (TriMVPP)
             </span>
           </h1>
 
           <p className="text-base sm:text-lg text-slate-300 leading-relaxed max-w-2xl">
-            AI-powered decision support system designed to accurately classify genomic missense and non-coding variants. 
+            AI-powered decision support system designed to accurately classify missense single-nucleotide variants. 
             Integrates deep neural sequence representations with spatial geometry LVD embeddings and multi-modal biological functional annotations.
           </p>
 
@@ -168,7 +168,7 @@ export const Home: React.FC = () => {
         <div className="flex items-center gap-2">
           <Layers className="h-5 w-5 text-indigo-600" />
           <h3 className="text-lg font-bold text-slate-900">
-            RB-Net Hybrid Architecture Highlights
+            TriMVPP Architecture Highlights
           </h3>
         </div>
 
@@ -179,7 +179,7 @@ export const Home: React.FC = () => {
               <span>1. Multi-modal Feature Extraction</span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Synchronously extracts 4 feature representations: nucleotide sequences, protein physicochemical properties, biological splicing annotations, and spatial geometry LVD vectors.
+              Combines three branches: DNA sequence tokens (NT-v1), protein sequence tokens (ESM-1b), and 28 biological, SpliceAI and latent-geometry features.
             </p>
           </div>
 
@@ -189,7 +189,7 @@ export const Home: React.FC = () => {
               <span>2. Strict Binary Classification</span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Provides decisive binary predictions (Pathogenic vs. Benign) calibrated directly against official ClinVar ground truth standards.
+              Provides binary predictions (Pathogenic vs. Benign) using a decision threshold selected on the validation set for each configuration. ClinVar labels are shown for comparison.
             </p>
           </div>
 
@@ -199,7 +199,7 @@ export const Home: React.FC = () => {
               <span>3. Explainable AI (XAI) Verification</span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Quantifies exact SHAP attribution scores to enable clinical investigators to inspect why a variant is predicted as pathogenic or benign.
+              Attributes each prediction to its inputs with Integrated Gradients and shows the cross-attention maps, helping investigators inspect why a variant is predicted as pathogenic or benign.
             </p>
           </div>
         </div>

@@ -7,6 +7,7 @@ import type {
   BatchStreamEvent,
   SingleVariantRequest,
   SingleVariantResponse,
+  XaiResponse,
 } from "@/types"
 
 export type { BatchStreamEvent, SingleVariantRequest, SingleVariantResponse } from "@/types"
@@ -48,18 +49,41 @@ export async function predictSingleVariant(req: SingleVariantRequest): Promise<S
 }
 
 // ==========================================
-// 2. XAI SHAP (GET /xai/{variant_id}?ablation_mask=...)
+// MCC tập Test của từng tổ hợp (GET /health), gọi một lần rồi dùng lại; lỗi thì chỉ ẩn dòng MCC
 // ==========================================
-export async function fetchVariantXai(variantId: string, mask: number): Promise<SingleVariantResponse> {
+interface HealthCheckpoint {
+  combination: string
+  test_mcc: number | null
+}
+
+let testMccRequest: Promise<Record<string, number>> | null = null
+
+export function fetchTestMcc(): Promise<Record<string, number>> {
+  if (USE_MOCK_API) return Promise.resolve({})
+  testMccRequest ??= requestJson<{ checkpoints: HealthCheckpoint[] }>(`${API_BASE_URL}/health`, undefined, "Health check failed")
+    .then(({ checkpoints }) =>
+      Object.fromEntries(checkpoints.flatMap((c) => (c.test_mcc === null ? [] : [[c.combination, c.test_mcc]])))
+    )
+    .catch(() => {
+      testMccRequest = null // thử lại ở lần mở panel sau
+      return {}
+    })
+  return testMccRequest
+}
+
+// ==========================================
+// 2. XAI: Integrated Gradients + attention (GET /xai/{variant_id}?ablation_mask=...)
+// ==========================================
+export async function fetchVariantXai(variantId: string, mask: number): Promise<XaiResponse> {
   if (mask <= 0 || mask > 15) {
-    throw new Error("Invalid ablation mask (0/15). At least one modality must remain active to compute SHAP values.")
+    throw new Error("Invalid ablation mask (0/15). At least one modality must remain active to explain the prediction.")
   }
   if (USE_MOCK_API) return mockFetchVariantXai(variantId, mask)
 
-  return requestJson<SingleVariantResponse>(
+  return requestJson<XaiResponse>(
     `${API_BASE_URL}/xai/${encodeURIComponent(variantId)}?ablation_mask=${mask}`,
     undefined,
-    "Failed to fetch SHAP values"
+    "Failed to fetch the explanation (IG / attention)"
   )
 }
 

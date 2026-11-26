@@ -1,0 +1,253 @@
+
+% Placeholder for values that will be filled in after the benchmark is re-run with all seven checkpoints.
+\providecommand{\tbd}{\underline{\hspace{1.2cm}}}
+
+\chapter{System Design and Implementation}
+\label{chap:system_design}
+
+To operationalize the proposed multimodal variant pathogenicity framework as a research-oriented platform for clinical genomics and exploratory model interpretation, we designed and implemented the \textbf{RB-Net Variant Pathogenicity Classification System}. Beyond serving as an offline model-training pipeline, the system provides an interactive, end-to-end web application that supports on-demand annotation of human genomic coordinates, GPU-accelerated inference using foundation models, streaming-based cohort screening, and interactive feature-level explainability.
+
+\section{System Architecture}
+\label{sec:system_architecture}
+
+The system follows a decoupled, \textbf{three-tier modular client--server architecture} that separates user interaction, asynchronous AI orchestration, and persistent genomic data management. This separation of concerns is intended to maintain frontend responsiveness during computationally intensive bioinformatics annotation and deep neural network inference, while facilitating the independent scalability and maintainability of each subsystem. As illustrated in Figure~\ref{fig:system_architecture}, the platform consists of three primary layers:
+
+\begin{enumerate}
+    \item \textbf{Presentation Layer (Frontend):}
+    The presentation layer is implemented as a responsive Single-Page Application (SPA) using \texttt{React 19.3}, \texttt{TypeScript}, and \texttt{Vite}. The user interface is styled with \texttt{Tailwind CSS}, while \texttt{Recharts} provides interactive data visualization capabilities. The frontend organizes system functionality into four dedicated views: the system overview landing page (\texttt{/}), single-variant inspection (\texttt{/single}), real-time batch screening (\texttt{/batch}), and explainable AI attribution (\texttt{/xai}). Application state is managed locally through component-level hooks, URL query parameters, and browser \texttt{sessionStorage}, avoiding the overhead of a centralized global state store. URL query parameters preserve shareable variant-specific and ablation configurations, whereas \texttt{sessionStorage} retains batch-screening progress across page navigation. Communication with the backend is performed asynchronously through RESTful JSON endpoints and Server-Sent Events (SSE), using the native \texttt{EventSource} API or \texttt{ReadableStream}-based handlers.
+
+    \item \textbf{Application and AI Inference Layer (Backend):}
+    The backend is built on the asynchronous \texttt{FastAPI} framework using \texttt{Python 3.10} and is served through \texttt{Uvicorn}, an ASGI server. This middle tier serves as the central orchestration component of the platform. It enforces request and response schema validation through \texttt{Pydantic}, assigns unique correlation identifiers (\texttt{X-Request-ID}) for request tracking and stage-level latency profiling, and offloads blocking I/O operations and selected synchronous tasks to background worker threads using \texttt{asyncio.to\_thread} and \texttt{ThreadPoolExecutor}. These mechanisms help prevent blocking operations from directly interrupting the asynchronous event loop. Within this layer, \texttt{PyTorch} (CUDA 12.1, FP32 precision) performs batched forward inference using the DNA and protein foundation models (\texttt{NT-v1 500M} and \texttt{ESM-2 650M}), supports manifold geometry computation, dynamically routes checkpoints across seven feature-ablation configurations through \texttt{RouterExpertCorrection} and \texttt{MultiStrategyFusionModel}, and performs vectorized permutation-based Shapley value estimation.
+
+    \item \textbf{Data and Bioinformatics Layer:}
+    The data and bioinformatics layer provides persistent data storage and locally deployed bioinformatics resources to support reproducible processing and low-latency data retrieval. It comprises the following components:
+    \begin{itemize}
+        \item \textbf{Hybrid Relational-Vector Storage:} A containerized \texttt{PostgreSQL 16} instance, extended with \texttt{pgvector}, serves as the primary data storage system. It stores normalized variant metadata, cached predictions for each ablation configuration, raw biological features and SHAP attributions in \texttt{JSONB} fields, and four $1{,}280$-dimensional foundation model embedding vectors per variant using the \texttt{vector(1280)} data type.
+
+        \item \textbf{Offline Bioinformatics Engines and Reference Indexes:} Variant consequence annotation is performed locally through a Dockerized \texttt{Ensembl VEP} (release 116) service integrated with the \texttt{dbNSFP 5.3.1a} plugin. Efficient sequence extraction and splicing-related queries are supported by locally indexed GRCh38 primary assembly DNA and Ensembl peptide FASTA files using \texttt{pyfaidx}. The layer also incorporates a custom bgzip/tabix reader (\texttt{NativeTabixReader}) for retrieving \texttt{SpliceAI MANE v1.4} scores, alongside two pre-built \texttt{FAISS IndexFlatL2} indexes (one per foundation model), each containing $23{,}208$ reference vectors of dimension $1{,}280$, for manifold intrinsic dimensionality estimation.
+    \end{itemize}
+\end{enumerate}
+
+\begin{figure}[htbp]
+    \centering
+    % Replace the placeholder box below with your exported high-resolution diagram (e.g., figures/fig5_1_system_architecture.pdf)
+    \fbox{\parbox{0.92\textwidth}{\centering\vspace{2.2cm}\textit{[Placeholder for Figure 5.1: High-level Three-Tier System Architecture of the RB-Net Platform]}\vspace{2.2cm}}}
+    \caption{High-level three-tier system architecture of the RB-Net Variant Pathogenicity Classification System, illustrating the component organization and interactions among the React SPA presentation layer, the FastAPI/PyTorch application and inference layer, and the PostgreSQL/\texttt{pgvector} storage and offline bioinformatics layer.}
+    \label{fig:system_architecture}
+\end{figure}
+
+
+\section{Artificial Intelligence Model and Bioinformatics Pipeline Integration}
+\label{sec:ai_pipeline_integration}
+
+Integrating large-scale genomic foundation models with established bioinformatics resources into an interactive web service introduces two primary engineering challenges: minimizing repeated resource initialization overhead during request processing and ensuring mathematical and computational consistency between the offline training pipeline and online inference. To address these challenges, the backend integrates variant annotation, feature extraction, neural network routing, and explainability procedures into a unified inference engine with centralized resource management and concurrency-aware execution.
+
+\subsection{Startup Resource Preloading and GPU Warm-Up}
+
+Loading large foundation models, genome indexes, and serialized preprocessing artifacts on demand would introduce substantial cold-start latency during request processing. To mitigate this overhead, the FastAPI application implements an asynchronous \texttt{lifespan} initialization hook (\texttt{PRELOAD\_ON\_STARTUP=True}), which executes a predefined resource initialization and GPU warm-up sequence before the application begins accepting HTTP requests:
+
+\begin{enumerate}
+    \item \textbf{Genomic and Proteomic Index Initialization:} Opens indexed \texttt{pyfaidx} file handles for the GRCh38 primary assembly DNA FASTA and the Ensembl peptide FASTA. Pre-initializing these resources moves approximately $2.7\text{ s}$ of observed file-indexing overhead out of the live request-processing path, thereby avoiding repeated initialization during individual requests.
+
+    \item \textbf{Vector Indexes and Preprocessing Artifacts:} Loads the two pre-built \texttt{FAISS IndexFlatL2} structures, each containing $23{,}208$ reference vectors of dimension $1{,}280$, into host RAM. The initialization routine also parses the binary \texttt{.tbi} tabix index header associated with the \texttt{SpliceAI} archive ($\approx 150\text{ ms}$) and preloads eight serialized normalization artifacts fitted on the training set: six \texttt{bio\_*.pkl} files (imputer, scalers, and SpliceAI fill values) and two \texttt{*\_geom\_v2\_scalers.pkl} files containing the per-column geometry scalers and fill values for the DNA and protein branches.
+
+    \item \textbf{Foundation Model Allocation and Dummy Forward Pass:} Loads \texttt{NT-v1 500M} (\texttt{InstaDeepAI/nucleotide-transformer-500m-human-ref}) and \texttt{ESM-2 650M} (\texttt{facebook/esm2\_t33\_650M\_UR50D}) onto the NVIDIA CUDA device using \texttt{FP32} precision, with an estimated combined VRAM requirement of approximately $5.5\text{ GB}$. % TODO: re-confirm 5.5 GB and 15--30 s with the FP32 benchmark script
+    A synthetic dummy forward pass is subsequently executed using a $1{,}001\text{ bp}$ DNA sequence and a $501\text{ aa}$ protein sequence, alongside the preloading of the primary classifier checkpoint (configuration \texttt{111}). This warm-up procedure initializes the required \texttt{cuBLAS}/\texttt{cuDNN} kernels and establishes initial GPU memory allocations. The complete initialization sequence is performed once during application startup, typically requiring $15\text{--}30\text{ s}$.
+\end{enumerate}
+
+\subsection{Bioinformatics Annotation and Input Quality Control}
+
+When an uncached genomic variant specified in the format $\texttt{chr\{CHROM\}:\{POS\}:\{REF\}>\{ALT\}}$ enters the inference pipeline, it undergoes automated consequence annotation and biological input validation before feature tensor construction:
+
+\begin{itemize}
+    \item \textbf{Automated Variant Effect Annotation (\texttt{Ensembl VEP 116}):} The backend serializes input variants into a temporary VCFv4.2 file and invokes the containerized \texttt{Ensembl VEP} engine (\texttt{rbnet\_vep}) in \texttt{--offline} mode against the GRCh38 cache. The flags \texttt{--mane\_select}, \texttt{--canonical}, and \texttt{--pick} are used to apply the configured transcript prioritization rules, favoring MANE Select and canonical transcripts when selecting the variant consequence for downstream analysis. The $11$ core biological features are obtained from two sources: the two population allele frequencies (\texttt{AF} from 1000 Genomes and \texttt{gnomADe\_AF}) are retrieved from the VEP cache through the \texttt{--af} and \texttt{--af\_gnomade} options, whereas the nine evolutionary conservation scores---three \texttt{phyloP} tracks, three \texttt{phastCons} tracks, and three GERP-based scores (\texttt{GERP++\_RS}, \texttt{GERP++\_NR}, and \texttt{GERP\_92\_mammals})---are retrieved through the \texttt{dbNSFP 5.3.1a} plugin. The same plugin additionally provides the \texttt{AlphaMissense} and \texttt{REVEL} benchmark scores and the ClinVar clinical significance (\texttt{clinvar\_clnsig}), with the VEP \texttt{CLIN\_SIG} field (\texttt{--check\_existing}) used as a fallback. For cohorts containing more than $50$ variants, multi-process parallelization is automatically enabled through the \texttt{--fork 4} option.
+
+    \item \textbf{Missense Gatekeeper and GRCh38 Build Verification:} Since RB-Net is specifically trained for missense single-nucleotide variants (SNVs), a dedicated \texttt{Missense Gatekeeper} evaluates the VEP consequence annotation and rejects non-missense variants, including synonymous, intronic, and frameshift variants, before model inference. Rejected variants generate an explicit domain-level error (\texttt{HTTP 422}, \texttt{NON\_MISSENSE\_VARIANT}, in single-variant mode or a \texttt{variant\_skipped} event during batch streaming). In addition, the sequence service enforces SNV input constraints ($|\texttt{REF}| = |\texttt{ALT}| = 1$ and $\texttt{REF} \neq \texttt{ALT}$). It subsequently verifies the reference allele against the local GRCh38 DNA sequence and checks the annotated amino acid against the corresponding Ensembl peptide sequence at the target locus. Variants violating these constraints are rejected with \texttt{HTTP 400} (\texttt{INVALID\_VARIANT}) in single-variant mode, or emitted as \texttt{variant\_skipped} events with \texttt{detected\_consequence = invalid\_variant} during batch streaming. These validation procedures help detect coordinate-build inconsistencies, including potential GRCh37/hg19 inputs, and prevent incompatible variants from silently proceeding through the inference pipeline.
+
+    \item \textbf{Indexed SpliceAI Retrieval Without Full-Archive Decompression (\texttt{NativeTabixReader}):} To retrieve \texttt{SpliceAI MANE v1.4} predictions without decompressing the entire $\approx 29\text{ GB}$ bgzipped VCF archive, a custom Python BGZF/tabix reader parses the \texttt{.tbi} index offsets and selectively accesses and decompresses only the compressed blocks overlapping a fixed, aligned $1{,}024\text{ bp}$ genomic bin that contains the variant locus (i.e., the bin starting at $\lfloor (\texttt{POS}-1)/1024 \rfloor \times 1024$). The implementation also supports reverse-complement allele fallback and retrieves all nine SpliceAI features, comprising four delta scores (\texttt{DS\_AG}, \texttt{DS\_AL}, \texttt{DS\_DG}, and \texttt{DS\_DL}), four corresponding delta positions (\texttt{DP\_AG}, \texttt{DP\_AL}, \texttt{DP\_DG}, and \texttt{DP\_DL}), and the maximum delta score (\texttt{DS\_max}).
+\end{itemize}
+
+
+\subsection{Dynamic Ablation Routing (\texttt{CheckpointRegistry})}
+\label{subsec:ablation_routing}
+
+The frontend exposes three user-facing feature groups, each controlled by a single switch: \textit{DNA Sequence}, \textit{Protein Sequence}, and \textit{Bio + Geom + SpliceAI}. The Bio/SpliceAI and Geometry features are deliberately coupled into the third group, so that they are always enabled or disabled together. Each feature configuration is therefore identified by a $3$-bit key $b_{\text{DNA}}\,b_{\text{Prot}}\,b_{\text{BGS}}$, whose integer value $k = 4\,b_{\text{DNA}} + 2\,b_{\text{Prot}} + b_{\text{BGS}}$ ranges from $1$ to $7$. The all-disabled configuration ($k = 0$, key \texttt{000}) is rejected with \texttt{HTTP 400} (\texttt{NO\_MODALITY\_SELECTED}), leaving exactly seven valid configurations, as summarized in Table~\ref{tab:ablation_configs}.
+
+For persistence, the backend stores each configuration in the \texttt{ablation\_mask} column as a $4$-bit integer, where $\text{bit}_3$ corresponds to DNA, $\text{bit}_2$ to Protein, $\text{bit}_1$ to Bio/SpliceAI, and $\text{bit}_0$ to Geometry. Because the Bio + Geom + SpliceAI switch sets $\text{bit}_1$ and $\text{bit}_0$ simultaneously, the seven valid configurations map one-to-one onto the stored values $\{15, 12, 11, 8, 7, 4, 3\}$; for example, key \texttt{111} ($k = 7$) is stored as mask \texttt{15} ($1111_2$), and key \texttt{110} ($k = 6$) as mask \texttt{12} ($1100_2$).
+
+\begin{table}[htbp]
+    \centering
+    \caption{The seven feature-ablation configurations supported by the \texttt{CheckpointRegistry}.}
+    \label{tab:ablation_configs}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{cccllc}
+        \toprule
+        \textbf{Key} & $\boldsymbol{k}$ & \textbf{Stored mask} & \textbf{Active feature groups} & \textbf{Architecture} & \textbf{SHAP players} \\
+        \midrule
+        \texttt{111} & 7 & 15 ($1111_2$) & DNA, Protein, Bio + Geom + SpliceAI & \texttt{RouterExpertCorrection} & 30 \\
+        \texttt{110} & 6 & 12 ($1100_2$) & DNA, Protein & \texttt{MultiStrategyFusionModel} & 2 \\
+        \texttt{101} & 5 & 11 ($1011_2$) & DNA, Bio + Geom + SpliceAI & \texttt{MultiStrategyFusionModel} & 29 \\
+        \texttt{100} & 4 & 8 ($1000_2$) & DNA & \texttt{MultiStrategyFusionModel} & 1 \\
+        \texttt{011} & 3 & 7 ($0111_2$) & Protein, Bio + Geom + SpliceAI & \texttt{MultiStrategyFusionModel} & 29 \\
+        \texttt{010} & 2 & 4 ($0100_2$) & Protein & \texttt{MultiStrategyFusionModel} & 1 \\
+        \texttt{001} & 1 & 3 ($0011_2$) & Bio + Geom + SpliceAI & \texttt{MultiStrategyFusionModel} & 28 \\
+        \bottomrule
+    \end{tabular}}
+\end{table}
+
+At runtime, \texttt{CheckpointRegistry} resolves the active configuration to its corresponding trained checkpoint and infers the model architecture directly from the stored \texttt{state\_dict}. The full multimodal configuration (\texttt{111}) employs \texttt{RouterExpertCorrection}, comprising $6{,}462{,}728$ parameters, temperature-scaled gating with $T = 0.3074$, and a learnable residual correction weight $\beta$. The six unimodal and bimodal configurations use their respective \texttt{MultiStrategyFusionModel} checkpoints. Finally, the system applies a checkpoint-specific MCC-optimal decision threshold $\tau$ to classify each variant as \textit{Pathogenic} ($p \geq \tau$) or \textit{Benign} ($p < \tau$); for example, $\tau = 0.6376$ for the full multimodal configuration. Thresholds are read from the checkpoint metadata or from the \texttt{MODEL\_DECISION\_THRESHOLDS} configuration, with a default of $\tau = 0.5$ applied when no calibrated threshold is provided.
+
+
+\subsection{Integrated Vectorized Permutation-Based SHAP Engine}
+
+Rather than relying on external model-agnostic explainability tools, RB-Net incorporates a GPU-accelerated permutation-based Shapley value estimation procedure directly into the inference engine. The input features are partitioned into interpretable players whose number $n$ depends on the active configuration (Table~\ref{tab:ablation_configs}): one block-level player for each active latent displacement vector---the complete $1{,}280$-dimensional DNA and protein displacements $\boldsymbol{\delta}_{\text{DNA}}$ and $\boldsymbol{\delta}_{\text{Prot}}$---and, when the \textit{Bio + Geom + SpliceAI} group is enabled, $28$ individual players corresponding to the standardized tabular features ($20$ biological and SpliceAI features and $8$ geometric descriptors). For the full multimodal configuration (\texttt{111}), this yields $n = 30$ players.
+
+The attribution procedure adopts a neutral zero baseline, in which the latent displacement vectors are initialized to zero ($\boldsymbol{\delta} = \mathbf{0}$) and the standardized tabular features are set to zero. The engine generates $128$ antithetic feature permutations, comprising $64$ pseudorandom orderings and their corresponding reversed orderings, to reduce estimation variance. For each permutation, $n + 1$ nested coalition states are evaluated, including the empty coalition and the complete feature coalition. All $128 \times (n + 1)$ coalition masks are flattened into a single batch tensor and evaluated on the GPU in vectorized chunks (\texttt{SHAP\_EVAL\_CHUNK=2048}); for the full configuration, this amounts to $128 \times 31 = 3{,}968$ coalition evaluations per variant.
+
+The resulting permutation-based estimates of logit-scale Shapley attributions, denoted by $\phi_i$, are computed within the online inference workflow. By aggregating the marginal contributions along each complete permutation, the estimator preserves the Shapley efficiency identity, up to numerical precision:
+
+\[
+    \sum_{i=1}^{n} \phi_i = f(\mathbf{x}) - f(\mathbf{0}).
+\]
+
+
+
+\section{Data Flow, Hybrid Lazy-Caching, and Communication Protocols}
+\label{sec:data_flow_caching}
+
+Interactive genomic analysis involves different latency requirements across user workflows. Exploratory modality ablation and repeated inspection of previously queried variants require low-latency responses, whereas the analysis of previously unseen variants involves computationally intensive bioinformatics annotation and foundation model inference. To accommodate these requirements, the system adopts a \textbf{Hybrid Lazy-Caching architecture} combined with two complementary communication mechanisms: conventional \textbf{RESTful JSON request--response communication} for single-variant inspection and \textbf{Server-Sent Events (SSE)} for incremental batch result streaming.
+
+\subsection{Hybrid Lazy-Caching and Versioned Invalidation}
+
+Rather than caching only final prediction outputs, the backend separates computationally expensive upstream feature extraction (\texttt{inference\_features}) from downstream classification and explainability results (\texttt{predictions}). Extracted embeddings and unscaled biological descriptors are persisted independently of prediction-specific outputs, allowing the system to reuse previously computed representations across different inference configurations. Accordingly, each inference request follows one of three execution paths:
+
+\begin{enumerate}
+    \item \textbf{Full Cache Hit (\texttt{cache=hit}):} When \texttt{use\_cache=True}, the backend checks whether PostgreSQL contains both valid upstream feature records matching the current \texttt{EXTRACTOR\_TAG} and a corresponding prediction record matching the composite key $(\texttt{variant\_id}, \texttt{ablation\_mask}, \texttt{model\_tag})$. When both records are available and valid, the backend bypasses the bioinformatics annotation, foundation model inference, downstream classification, and SHAP computation stages, returning the previously persisted prediction payload through a lightweight database lookup.
+
+    \item \textbf{Feature Cache Reuse / Live Bypass (\texttt{cache=features}):} When a user changes the active feature configuration on the frontend (e.g., disabling the \textit{Bio + Geom + SpliceAI} switch, i.e., switching from key \texttt{111} [stored mask \texttt{15}] to key \texttt{110} [stored mask \texttt{12}]) or enables \textit{Live Bypass Mode} (\texttt{use\_cache=False}) for a previously indexed variant, the backend bypasses the \texttt{predictions} cache while retaining access to valid upstream representations stored in \texttt{inference\_features}. These include the DNA and protein embeddings and unscaled tabular biological features. The engine subsequently re-executes feature normalization, checkpoint-specific model inference, and GPU-accelerated SHAP estimation without repeating \texttt{Ensembl VEP} annotation or foundation model forward passes. Detailed latency comparisons across the execution paths are presented in Section~\ref{sec:db_deployment_benchmarks}.
+
+    \item \textbf{Full Cache Miss (\texttt{cache=miss}):} When no valid upstream feature record is available for a variant, the orchestrator executes the complete annotation and feature extraction pipeline. The resulting variant metadata and extracted representations are persisted in PostgreSQL, after which the classifier and SHAP engine are executed. The resulting prediction probabilities and attribution values are subsequently stored for future requests.
+\end{enumerate}
+
+To prevent stale results following changes to extraction configurations or model weights, cache entries are governed by deterministic version identifiers. The \texttt{EXTRACTOR\_TAG} is generated using a truncated SHA-1 configuration fingerprint derived from the extraction pipeline settings. Modifications to the foundation model identifiers, context window dimensions ($1{,}001\text{ bp}$ / $501\text{ aa}$), padding tokens, compute device (\texttt{cuda} or \texttt{cpu}), or floating-point precision consequently produce a different fingerprint, making feature records associated with previous configurations ineligible for cache reuse.
+
+Similarly, \texttt{model\_tag} is composed of the checkpoint filename, its filesystem modification timestamp, and the current extractor fingerprint (\texttt{<checkpoint>.pth@<mtime>|<EXTRACTOR\_TAG>}). A cached prediction is therefore invalidated whenever either the classifier checkpoint or the upstream feature extraction configuration changes. The modification timestamp serves as a lightweight change-detection heuristic for model updates and can be extended with cryptographic content hashing when stronger checkpoint change detection is required. Furthermore, when persisted geometric features lack $\text{LID}$ values or were computed using an outdated neighborhood size ($k \neq 64$), the \texttt{\_refresh\_stale\_geometry} routine recomputes the affected $\text{LID}$ values directly from the persisted embeddings and invalidates the corresponding obsolete prediction records.
+
+\subsection{Single-Variant REST Workflow and Parallel I/O Overlap}
+
+Single-variant prediction requests (\texttt{POST /api/v1/predict/single}) and explainability retrieval requests (\texttt{GET /api/v1/xai/\{variant\_id\}}) use JSON-based HTTP communication. During a full cache miss in single-variant mode, the backend reduces end-to-end request latency through an overlapping execution strategy that coordinates external annotation processes with independent sequence extraction and GPU computation:
+
+\begin{itemize}
+    \item Immediately after input syntax validation, the orchestrator dispatches the containerized \texttt{Ensembl VEP 116} subprocess to a background worker thread managed by \texttt{ThreadPoolExecutor}. While the annotation subprocess is running, the orchestration workflow concurrently performs independent operations, including GRCh38 DNA window extraction, \texttt{SpliceAI} score retrieval through \texttt{NativeTabixReader}, and GPU-accelerated DNA inference using \texttt{NT-v1 500M}.
+
+    \item After VEP annotation completes and the resulting consequence passes the \texttt{Missense Gatekeeper}, the resolved ENSP isoform and corresponding amino acid position are used for protein sequence extraction and \texttt{ESM-2 650M} inference. The backend subsequently performs \texttt{FAISS}-based manifold geometry computation, checkpoint-specific classification through the model resolved by \texttt{CheckpointRegistry}, and vectorized SHAP estimation before returning the structured \texttt{SingleVariantResponse} payload.
+\end{itemize}
+
+\begin{figure}[htbp]
+    \centering
+    \fbox{\parbox{0.92\textwidth}{\centering\vspace{2.2cm}\textit{[Placeholder for Figure 5.2: Sequence Diagram of Single Variant Inference and Hybrid Lazy-Caching]}\vspace{2.2cm}}}
+    \caption{Sequence diagram illustrating the three hybrid lazy-caching execution paths (\texttt{hit}, \texttt{features}, and \texttt{miss}) in single-variant inference, together with the overlapping execution of \texttt{Ensembl VEP} annotation and independent DNA and SpliceAI extraction operations.}
+    \label{fig:single_sequence}
+\end{figure}
+
+\subsection{High-Throughput Batch Screening via Server-Sent Events (SSE)}
+
+Processing multi-variant genomic cohorts through conventional request--response interactions can introduce HTTP timeout risks and provide limited visibility into processing progress. To address these limitations, the system implements an incremental streaming mechanism based on \textbf{Server-Sent Events (SSE)}. The batch-upload endpoint (\texttt{POST /api/v1/predict/batch-upload}) accepts \texttt{.vcf}, \texttt{.csv}, \texttt{.txt}, \texttt{.parquet}, and \texttt{.xlsx} files, with automatic column-alias detection and duplicate-variant removal. The streaming endpoint (\texttt{GET /api/v1/predict/batch-stream}) provides incremental processing updates for a predefined $10$-variant GRCh38 benchmark cohort. Both endpoints deliver structured updates using the \texttt{text/event-stream} media type.
+
+To improve processing throughput while maintaining asynchronous event-loop responsiveness, batch execution is organized into a three-stage micro-batched streaming pipeline:
+
+\begin{enumerate}
+    \item \textbf{Cohort-Wide Annotation Prefetch:} The backend first identifies variants for which valid cached upstream features are unavailable in PostgreSQL. It then invokes \texttt{Ensembl VEP} across the remaining uncached variants in a consolidated annotation operation, enabling the \texttt{--fork 4} option when more than $50$ variants are queued. Following consequence annotation and missense validation, batch \texttt{SpliceAI} lookups are performed for eligible missense SNVs.
+
+    \item \textbf{Micro-Batched GPU Feature Extraction:} Variants requiring new feature extraction are partitioned into micro-batches containing up to \texttt{FM\_BATCH\_VARIANTS=8} variants each. For every micro-batch, the system performs batched forward inference using \texttt{NT-v1 500M} and \texttt{ESM-2 650M}, computes the manifold geometry descriptors of each variant through \texttt{FAISS} nearest-neighbor search, and persists the upserts of all variants in the micro-batch within a single database transaction.
+
+    \item \textbf{Real-Time Event Emission and Client Stream Handling:} Once the features of a micro-batch have been persisted, classification and SHAP estimation are executed sequentially for each variant, and the backend delivers a JSON-encoded SSE event to the browser as soon as each variant completes. Supported event types include \texttt{variant\_stream} for successfully classified missense variants, \texttt{variant\_skipped} for variants rejected by the \texttt{Missense Gatekeeper} or coordinate validation, \texttt{stream\_completed} containing final cohort statistics, and \texttt{stream\_error} for infrastructure-level failures.
+
+    Since the browser's native \texttt{EventSource} API supports only \texttt{GET} requests, the frontend employs two distinct client-side stream handlers. The native \texttt{EventSource} client consumes \texttt{GET /api/v1/predict/batch-stream} and terminates the client-side connection through \texttt{EventSource.close()}. For the multipart \texttt{POST /api/v1/predict/batch-upload} endpoint, the frontend uses the Fetch API with a \texttt{ReadableStream} consumer and a custom SSE line parser (\texttt{parseSseLines}), with client-side request cancellation handled through \texttt{AbortController.abort()}. Incoming events update the live variant triage table, while batch progress is persisted in browser \texttt{sessionStorage}.
+\end{enumerate}
+
+\begin{figure}[htbp]
+    \centering
+    \fbox{\parbox{0.92\textwidth}{\centering\vspace{2.2cm}\textit{[Placeholder for Figure 5.3: Real-Time Batch Screening and Server-Sent Events (SSE) Streaming Pipeline]}\vspace{2.2cm}}}
+    \caption{High-throughput batch screening pipeline integrating cohort-wide VEP annotation, micro-batched foundation model inference ($N \leq 8$), and incremental result delivery through Server-Sent Events (SSE).}
+    \label{fig:batch_sse}
+\end{figure}
+
+
+
+\section{Database Schema, Deployment Topology, and Latency Analysis}
+\label{sec:db_deployment_benchmarks}
+
+To support low-latency interactive queries while maintaining traceability of intermediate biological features and neural representations, the system combines a normalized relational database with vector-valued storage and a hybrid deployment topology integrating local GPU inference with containerized data and bioinformatics services.
+
+\subsection{Relational-Vector Database Schema and Upsert Semantics}
+
+Persistent data storage is implemented using \texttt{PostgreSQL 16} extended with \texttt{pgvector} (database: \texttt{rbnet\_genomics}). Rather than maintaining a flat collection of prediction records, the database schema separates variant metadata, upstream feature representations, and ablation-specific inference outputs into three related tables connected through foreign key constraints with cascading deletion semantics (\texttt{ON DELETE CASCADE}), as illustrated in Figure~\ref{fig:db_erd}:
+
+\begin{enumerate}
+    \item \textbf{\texttt{variants} (Parent Entity):} Stores canonical GRCh38 variant identifiers as the primary key (\texttt{variant\_id}), formatted as \texttt{chr\{CHROM\}:\{POS\}:\{REF\}>\{ALT\}} (e.g., \texttt{chr7:140753336:A>T}). The table additionally maintains indexed HGNC gene symbols (\texttt{gene}), VEP consequence annotations (\texttt{consequence}), HGVS protein-level variant descriptions (\texttt{protein\_change}), normalized ClinVar clinical significance labels (\texttt{Pathogenic}, \texttt{Benign}, or \texttt{Uncertain}), and record creation timestamps.
+
+    \item \textbf{\texttt{inference\_features} ($1\text{:}1$ Upstream Representation Store):} Maintains a one-to-one relationship with \texttt{variants}, using \texttt{variant\_id} as both its primary key and a foreign key referencing the parent table. Each record stores the extraction configuration fingerprint (\texttt{extractor\_tag}) and four $1{,}280$-dimensional embedding vectors: \texttt{emb\_dna\_ref}, \texttt{emb\_dna\_alt}, \texttt{emb\_pro\_ref}, and \texttt{emb\_pro\_alt}, each represented using the \texttt{vector(1280)} data type. Both foundation models are executed in \texttt{FP32}; to reproduce the storage format of the embeddings used during training, the extracted center-token embeddings are rounded to \texttt{FP16} precision and then persisted as \texttt{FP32} vectors, ensuring numerical consistency between the training pipeline and online inference. The table also stores unscaled biological, splicing, and geometric descriptors in the \texttt{raw\_features} (\texttt{JSONB}) field, together with transcript annotations and benchmark metadata in the \texttt{annotation} (\texttt{JSONB}) field. In this architecture, \texttt{pgvector} provides persistent storage and efficient retrieval of dense embedding representations for subsequent feature hydration, whereas nearest-neighbor manifold computations remain delegated to the in-memory \texttt{FAISS} indexes.
+
+    \item \textbf{\texttt{predictions} ($1\text{:}N$ Ablation-Specific Active Output Store):} Stores prediction records associated with each variant across the supported ablation configurations. A composite unique index, \texttt{ix\_variant\_mask}, on $(\texttt{variant\_id}, \texttt{ablation\_mask})$ ensures that each variant has at most one active prediction record for a given configuration. Since only the seven configurations in Table~\ref{tab:ablation_configs} are valid, each variant holds at most seven prediction records, with \texttt{ablation\_mask} taking one of the stored values $\{15, 12, 11, 8, 7, 4, 3\}$. Each record persists the predicted pathogenicity probability (\texttt{rb\_net\_prob}), binary classification label (\texttt{classification}), dbNSFP benchmark scores (\texttt{sota\_alphamissense} and \texttt{sota\_revel}), ranked feature-level attributions (\texttt{shap\_values} as \texttt{JSONB}), and the associated model version identifier (\texttt{model\_tag}), which is used to validate checkpoint and extractor currency.
+\end{enumerate}
+
+To prevent duplicate records and support consistent insert-or-update behavior across concurrent requests, Live Bypass re-evaluations, and checkpoint updates, database write operations use PostgreSQL's native \texttt{INSERT ... ON CONFLICT DO UPDATE} mechanism. The conflict targets are \texttt{variant\_id} for both \texttt{variants} and \texttt{inference\_features}, and the composite key $(\texttt{variant\_id}, \texttt{ablation\_mask})$ for \texttt{predictions}. This approach maintains a single active record for each logical key and allows outdated prediction values to be replaced in place when a new model version is evaluated.
+
+Upstream feature records are committed to PostgreSQL before downstream classifier evaluation. Consequently, if classification or explainability processing subsequently fails, a subsequent request can reuse the persisted variant annotations and foundation model representations, provided that the corresponding extraction configuration remains valid. This avoids unnecessary repetition of computationally expensive \texttt{Ensembl VEP} annotation and sequence embedding extraction.
+
+\begin{figure}[htbp]
+    \centering
+    \fbox{\parbox{0.92\textwidth}{\centering\vspace{2.2cm}\textit{[Placeholder for Figure 5.4: Entity-Relationship Diagram (ERD) of the RB-Net Database]}\vspace{2.2cm}}}
+    \caption{Entity-Relationship Diagram (ERD) of the \texttt{rbnet\_genomics} PostgreSQL schema, illustrating the one-to-one relationship between \texttt{variants} and \texttt{inference\_features}, including four $1{,}280$-dimensional \texttt{pgvector} embedding columns, and the one-to-many relationship with ablation-indexed active prediction records in \texttt{predictions}.}
+    \label{fig:db_erd}
+\end{figure}
+
+\subsection{Hybrid Containerized and Local GPU Deployment}
+
+Container isolation facilitates the management of bioinformatics annotation services and relational database dependencies, whereas large pretrained PyTorch foundation models benefit from direct, low-overhead access to the host CUDA runtime. Accordingly, the system adopts a \textbf{hybrid deployment topology} that separates containerized infrastructure services from the locally executed GPU inference backend:
+
+\begin{itemize}
+    \item \textbf{Containerized Data and Annotation Services:} The \texttt{docker-compose.yml} configuration manages the \texttt{rbnet\_postgres} container, based on \texttt{pgvector/pgvector:pg16}. The database service is exposed through host port \texttt{5433}, uses the persistent Docker volume \texttt{postgres\_data}, and incorporates automated \texttt{pg\_isready} health checks to verify database availability. Annotation is performed by a separately provisioned offline bioinformatics container (\texttt{rbnet\_vep}), which is not managed by Docker Compose and must be running before annotation requests are issued. This container is based on \texttt{ensemblorg/ensembl-vep:latest}, configured to run \texttt{Ensembl VEP} release 116, and mounts the host GRCh38 FASTA reference, VEP release 116 cache, \texttt{dbNSFP 5.3.1a} database, and temporary VCF exchange directory (\texttt{/tmp\_io}) through local bind mounts. The FastAPI backend invokes annotation operations within this container through \texttt{docker exec} commands. For improved deployment reproducibility, the container image should be pinned to a verified release-specific tag or immutable image digest rather than relying on the floating \texttt{latest} tag, ensuring consistent annotation behavior across redeployments.
+
+    \item \textbf{Local GPU Inference Runtime and Unified Orchestration:} The FastAPI backend executes within an isolated \texttt{Python 3.10} virtual environment (\texttt{backend/.venv}), configured with \texttt{PyTorch 2.4.1+cu121} and \texttt{safetensors}-based foundation model weights. This arrangement enables direct utilization of host GPU acceleration while exposing the inference API through port \texttt{8000}. The backend is launched without hot-reload options to avoid unnecessary process restarts and potential duplicate allocations of multi-gigabyte GPU memory. The React/Vite frontend runs separately on port \texttt{5173}, while a unified startup script (\texttt{start\_system.bat}) coordinates the sequential launch of the database container, the backend, and the frontend.
+\end{itemize}
+
+\subsection{Experimental Latency Evaluation}
+
+\textbf{Experimental Setup:} To quantify request-processing responsiveness under the local deployment environment, runtime latency was evaluated on a workstation equipped with an \textbf{AMD Ryzen 7 8745H CPU}, \textbf{32 GB DDR5 RAM}, an \textbf{NVIDIA GeForce RTX 4060 Laptop GPU (8 GB VRAM)}, and \textbf{Windows 11}. The system executes CUDA inference using \texttt{FP32} precision, with PostgreSQL and the Ensembl VEP annotation service hosted locally through Docker.
+
+Latency was measured server-side using the built-in request profiler. For single-variant requests, \texttt{meta.computation\_time\_ms} measures the interval from the entry of the validated request into the inference pipeline to the construction of the response object, together with a per-stage breakdown (\texttt{meta.timings\_ms}: \texttt{vep}, \texttt{spliceai}, \texttt{fm\_dna}, \texttt{fm\_prot}, \texttt{geom}, \texttt{norm}, \texttt{shap}, and \texttt{db}). For batch screening, the total cohort processing time was obtained from the server log entry emitted upon stream completion (\texttt{batch completed \ldots{} total=\ldots ms}). The measurements were collected after one-time application initialization, including the \texttt{lifespan} resource-preloading and GPU warm-up procedures, which require approximately \tbd{}~s and result in an observed GPU memory footprint of approximately \tbd{}~GB. % TODO: fill in after the FP32 benchmark
+Startup time is excluded from the request-level latency measurements.
+
+The evaluation used a sequential single-user workload based on a $10$-variant GRCh38 benchmark missense cohort. The tested scenarios included uncached requests (\texttt{cache=miss}) and warm-cache operations involving feature reuse (\texttt{cache=features}) or previously persisted predictions (\texttt{cache=hit}). The reported values represent empirical measurements obtained under the specified hardware and deployment configuration rather than hardware-independent performance guarantees. Since the profiler operates server-side, the reported latency does not include JSON serialization, external network transmission, or browser-side rendering time.
+
+% TODO: fill in the "Observed Latency" column once all seven checkpoints are available.
+\begin{table}[htbp]
+    \centering
+    \caption{Empirical server-side processing latency across execution paths and caching states on the reference RTX 4060 workstation under a sequential single-user workload using the $10$-variant GRCh38 benchmark cohort.}
+    \label{tab:latency_benchmarks}
+    \small
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabular}{p{0.18\linewidth}p{0.20\linewidth}p{0.42\linewidth}p{0.10\linewidth}}
+        \toprule
+        \raggedright\textbf{Execution Scenario} & \raggedright\textbf{Cache State} & \raggedright\textbf{Active Pipeline Stages} & \raggedright\textbf{Observed Latency} \tabularnewline
+        \midrule
+        \raggedright Single Variant (Novel) & \texttt{cache=miss} & \raggedright Concurrent VEP 116 annotation, SpliceAI retrieval, and NT-v1 500M DNA inference, followed by ESM-2 650M inference, FAISS geometry ($k=64$), classifier routing, and SHAP estimation & \tbd{} \tabularnewline
+        \addlinespace
+        \raggedright Batch Cohort ($10$ Variants) & \texttt{cache=miss} & \raggedright Cohort-wide VEP prefetching, micro-batched foundation model extraction ($N \le 8$), per-variant classification and SHAP estimation, and SSE result streaming & \tbd{} \tabularnewline
+        \addlinespace
+        \raggedright Ablation Toggle / Live Bypass & \texttt{cache=features} & \raggedright Database embedding retrieval, feature normalization, checkpoint routing, and GPU-accelerated SHAP estimation (up to $3{,}968$ coalition evaluations) & \tbd{} \tabularnewline
+        \addlinespace
+        \raggedright Repeated Variant Query & \texttt{cache=hit} & \raggedright Indexed PostgreSQL lookup using \texttt{variant\_id} and \texttt{ablation\_mask}, with model-version validation & \tbd{} \tabularnewline
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+As summarized in Table~\ref{tab:latency_benchmarks}, separating upstream feature extraction from downstream classification and explainability enables substantial reductions in repeated computation and improves overall processing throughput:
+
+\begin{itemize}
+    \item \textbf{Improved Batch Processing Throughput:} Processing the $10$-variant GRCh38 benchmark cohort from an uncached state completes in approximately \tbd{}~s, corresponding to an average processing time of \tbd{}~s per variant. Compared with sequential single-variant execution, which requires approximately \tbd{}~s per variant, batch processing achieves an approximate \tbd{}$\times$ throughput improvement. This improvement is primarily attributed to consolidated cohort-wide VEP annotation and micro-batched foundation model inference, which reduce repeated initialization and execution overhead, whereas classification and SHAP estimation are still performed per variant.
+
+    \item \textbf{Low-Latency Interactive Exploration:} Once a variant's upstream representations have been persisted in \texttt{inference\_features}, interactive modality ablation and Live Bypass re-evaluation complete in approximately \tbd{}~s per query. Repeated requests for previously computed predictions require approximately \tbd{}~ms through the full-cache-hit execution path. These results demonstrate the effectiveness of feature reuse and prediction caching in reducing response latency during exploratory variant inspection and model interpretation.
+\end{itemize}
