@@ -38,7 +38,8 @@ class SingleVariantResponse(BaseModel):
     clinvar_ground_truth: ClassificationLabel
     results: ModelResults
     sota: SotaScores
-    ig_analysis: IgAnalysis
+    # None: chưa tính IG (chỉ tính khi mở trang XAI); /xai luôn trả giá trị.
+    ig_analysis: Optional[IgAnalysis] = None
     meta: InferenceMeta
 
 

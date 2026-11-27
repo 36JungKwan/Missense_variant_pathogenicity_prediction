@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time
 from typing import List
 
@@ -68,6 +69,11 @@ def _create_batch_sse_response(
 
     async def event_generator():
         db = SessionLocal()
+        pending_prefetch = None
+        # Set khi stream kết thúc (xong, lỗi, hoặc trình duyệt ngắt kết nối vì người dùng bấm Stop / rời trang):
+        # VEP đang chạy (kể cả khối chạy trước) bị kill, các khối còn lại không được xử lý.
+        cancel_event = threading.Event()
+        finished = False
         accepted_count = 0
         rejected_count = 0
         started = time.perf_counter()
@@ -84,119 +90,161 @@ def _create_batch_sse_response(
                 yield _event(type="stream_completed", progress_percent=100, summary=_summary())
                 return
 
-            # Một lần chạy VEP + tra SpliceAI cho toàn bộ file (chạy trong thread để không chặn event loop).
+            # File được chia thành các khối BATCH_CHUNK_VARIANTS biến thể. Mỗi khối: VEP + SpliceAI -> FM (micro-batch
+            # FM_BATCH_VARIANTS) -> dự đoán -> gửi kết quả ngay. VEP + SpliceAI của khối kế tiếp chạy song song (thread
+            # + session riêng) trong lúc GPU xử lý khối hiện tại, nên tổng thời gian gần bằng thời gian VEP.
             keys = [parse_variant_id(vid) for vid in variant_queue]
-            try:
-                prefetched = await asyncio.to_thread(prefetch_annotations, db, keys)
-            except PipelineError as exc:
-                db.rollback()
-                yield _event(type="stream_error", progress_percent=0, reason=exc.message, error_code=exc.error_code)
-                return
-            except OperationalError:
-                logger.error("Database unavailable during batch prefetch")
-                yield _event(type="stream_error", progress_percent=0, error_code="DATABASE_UNAVAILABLE",
-                             reason="PostgreSQL is not reachable. Start Docker Desktop and the rbnet_postgres container.")
-                return
-            except Exception:  # noqa: BLE001
-                logger.exception("Batch prefetch failed")
-                yield _event(type="stream_error", progress_percent=0, error_code="INTERNAL_ERROR",
-                             reason="Unexpected inference error (see server log).")
-                return
+            block = max(1, settings.BATCH_CHUNK_VARIANTS)
+            blocks = [keys[i:i + block] for i in range(0, total_count, block)]
+            n_blocks = len(blocks)
+
+            def _prefetch_block(block_keys):
+                session = SessionLocal()
+                try:
+                    return prefetch_annotations(session, block_keys, cancel_event=cancel_event)
+                finally:
+                    session.close()
+
+            def _start_prefetch(index: int) -> asyncio.Future:
+                task = asyncio.ensure_future(asyncio.to_thread(_prefetch_block, blocks[index]))
+                # Tránh cảnh báo "exception was never retrieved" khi stream bị huỷ giữa chừng.
+                task.add_done_callback(lambda f: f.cancelled() or f.exception())
+                return task
+
+            def _status(index: int, stage: str, message: str) -> dict:
+                return _event(type="stream_status", progress_percent=int(done / total_count * 100), stage=stage,
+                              chunk=index + 1, total_chunks=n_blocks, total_variants=total_count, status=message)
 
             done = 0
             chunk_size = max(1, settings.FM_BATCH_VARIANTS)
-            for chunk_start in range(0, total_count, chunk_size):
-                chunk_keys = keys[chunk_start:chunk_start + chunk_size]
-                # Foundation Models chạy gộp cho cả nhóm; đặc trưng được lưu vào DB trước khi suy luận.
+            pending_prefetch = _start_prefetch(0)
+            for block_index, block_keys in enumerate(blocks):
+                if not pending_prefetch.done():
+                    yield _status(block_index, "annotating",
+                                  f"Chunk {block_index + 1}/{n_blocks}: annotating {len(block_keys)} variants "
+                                  "with VEP + SpliceAI")
                 try:
-                    failures = await asyncio.to_thread(prepare_features_batch, db, chunk_keys, prefetched)
+                    prefetched = await pending_prefetch
                 except PipelineError as exc:
                     db.rollback()
                     yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
                                  reason=exc.message, error_code=exc.error_code)
                     return
-                except Exception:  # noqa: BLE001 - báo lỗi về UI thay vì cắt stream im lặng
-                    logger.exception("Batch feature extraction failed")
-                    db.rollback()
+                except OperationalError:
+                    logger.error("Database unavailable during batch prefetch")
                     yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
-                                 reason="Unexpected inference error (see server log).", error_code="INTERNAL_ERROR")
+                                 error_code="DATABASE_UNAVAILABLE",
+                                 reason="PostgreSQL is not reachable. Start Docker Desktop and the rbnet_postgres container.")
                     return
+                except Exception:  # noqa: BLE001
+                    logger.exception("Batch prefetch failed")
+                    yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
+                                 error_code="INTERNAL_ERROR", reason="Unexpected inference error (see server log).")
+                    return
+                pending_prefetch = _start_prefetch(block_index + 1) if block_index + 1 < n_blocks else None
+                yield _status(block_index, "classifying",
+                              f"Chunk {block_index + 1}/{n_blocks}: extracting features and classifying "
+                              f"{len(block_keys)} variants")
 
-                for key in chunk_keys:
-                    vid = key.variant_id
-                    done += 1
-                    progress = int(done / total_count * 100)
-                    req = SingleVariantRequest(
-                        variant_id=vid,
-                        dna_enabled=dna_enabled,
-                        protein_enabled=protein_enabled,
-                        bio_enabled=bio_enabled,
-                        geo_enabled=geo_enabled,
-                        use_cache=True,
-                    )
+                for chunk_start in range(0, len(block_keys), chunk_size):
+                    chunk_keys = block_keys[chunk_start:chunk_start + chunk_size]
+                    # Foundation Models chạy gộp cho cả nhóm; đặc trưng được lưu vào DB trước khi suy luận.
                     try:
-                        if vid in failures:
-                            raise failures[vid]
-                        res = await asyncio.to_thread(run_single_variant_inference, db, req, prefetched)
-                        accepted_count += 1
-                        yield _event(
-                            type="variant_stream",
-                            progress_percent=progress,
-                            variant=BatchVariant(
-                                id=accepted_count,
-                                variant_id=res.variant_id,
-                                gene=res.gene,
-                                consequence=res.consequence,
-                                trimvpp_probability=res.results.trimvpp.probability,
-                                classification=res.results.trimvpp.label,
-                                clinvar_ground_truth=res.clinvar_ground_truth,
-                                sota_alphamissense=res.sota.alphamissense,
-                                danger_rank=accepted_count,
-                            ),
-                        )
-                    except NonMissenseVariantError as exc:
-                        db.rollback()
-                        rejected_count += 1
-                        yield _event(
-                            type="variant_skipped",
-                            progress_percent=progress,
-                            variant_id=exc.variant_id,
-                            detected_consequence=exc.detected_consequence,
-                            reason=f"Rejected by gatekeeper: Non-missense variant ({exc.detected_consequence}).",
-                            error_code=exc.error_code,
-                        )
-                    except InvalidVariantError as exc:
-                        # Lỗi riêng của biến thể (REF sai build, không phải SNV...) -> bỏ qua, chạy tiếp.
-                        db.rollback()
-                        rejected_count += 1
-                        yield _event(
-                            type="variant_skipped",
-                            progress_percent=progress,
-                            variant_id=vid,
-                            detected_consequence="invalid_variant",
-                            reason=exc.message,
-                            error_code=exc.error_code,
-                        )
+                        failures = await asyncio.to_thread(prepare_features_batch, db, chunk_keys, prefetched)
                     except PipelineError as exc:
-                        # Lỗi hạ tầng (thiếu scaler, VEP/Docker tắt...) ảnh hưởng mọi biến thể -> dừng stream.
                         db.rollback()
-                        yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                        yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
                                      reason=exc.message, error_code=exc.error_code)
                         return
-                    except Exception:  # noqa: BLE001
-                        logger.exception("Batch inference failed for %s", vid)
+                    except Exception:  # noqa: BLE001 - báo lỗi về UI thay vì cắt stream im lặng
+                        logger.exception("Batch feature extraction failed")
                         db.rollback()
-                        yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                        yield _event(type="stream_error", progress_percent=int(done / total_count * 100),
                                      reason="Unexpected inference error (see server log).", error_code="INTERNAL_ERROR")
                         return
 
-                    if stream_delay_ms > 0:
-                        await asyncio.sleep(stream_delay_ms / 1000.0)
+                    for key in chunk_keys:
+                        vid = key.variant_id
+                        done += 1
+                        progress = int(done / total_count * 100)
+                        req = SingleVariantRequest(
+                            variant_id=vid,
+                            dna_enabled=dna_enabled,
+                            protein_enabled=protein_enabled,
+                            bio_enabled=bio_enabled,
+                            geo_enabled=geo_enabled,
+                            use_cache=True,
+                        )
+                        try:
+                            if vid in failures:
+                                raise failures[vid]
+                            res = await asyncio.to_thread(run_single_variant_inference, db, req, prefetched)
+                            accepted_count += 1
+                            yield _event(
+                                type="variant_stream",
+                                progress_percent=progress,
+                                variant=BatchVariant(
+                                    id=accepted_count,
+                                    variant_id=res.variant_id,
+                                    gene=res.gene,
+                                    consequence=res.consequence,
+                                    trimvpp_probability=res.results.trimvpp.probability,
+                                    classification=res.results.trimvpp.label,
+                                    clinvar_ground_truth=res.clinvar_ground_truth,
+                                    sota_alphamissense=res.sota.alphamissense,
+                                    danger_rank=accepted_count,
+                                ),
+                            )
+                        except NonMissenseVariantError as exc:
+                            db.rollback()
+                            rejected_count += 1
+                            yield _event(
+                                type="variant_skipped",
+                                progress_percent=progress,
+                                variant_id=exc.variant_id,
+                                detected_consequence=exc.detected_consequence,
+                                reason=f"Rejected by gatekeeper: Non-missense variant ({exc.detected_consequence}).",
+                                error_code=exc.error_code,
+                            )
+                        except InvalidVariantError as exc:
+                            # Lỗi riêng của biến thể (REF sai build, không phải SNV...) -> bỏ qua, chạy tiếp.
+                            db.rollback()
+                            rejected_count += 1
+                            yield _event(
+                                type="variant_skipped",
+                                progress_percent=progress,
+                                variant_id=vid,
+                                detected_consequence="invalid_variant",
+                                reason=exc.message,
+                                error_code=exc.error_code,
+                            )
+                        except PipelineError as exc:
+                            # Lỗi hạ tầng (thiếu scaler, VEP/Docker tắt...) ảnh hưởng mọi biến thể -> dừng stream.
+                            db.rollback()
+                            yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                                         reason=exc.message, error_code=exc.error_code)
+                            return
+                        except Exception:  # noqa: BLE001
+                            logger.exception("Batch inference failed for %s", vid)
+                            db.rollback()
+                            yield _event(type="stream_error", progress_percent=progress, variant_id=vid,
+                                         reason="Unexpected inference error (see server log).", error_code="INTERNAL_ERROR")
+                            return
+
+                        if stream_delay_ms > 0:
+                            await asyncio.sleep(stream_delay_ms / 1000.0)
 
             logger.info("batch completed variants=%d accepted=%d rejected=%d total=%dms", total_count,
                         accepted_count, rejected_count, (time.perf_counter() - started) * 1000)
+            finished = True
             yield _event(type="stream_completed", progress_percent=100, summary=_summary())
         finally:
+            cancel_event.set()
+            if pending_prefetch is not None and not pending_prefetch.done():
+                pending_prefetch.cancel()
+            if not finished:
+                logger.info("batch stopped early (client disconnected or error) after %d/%d variants; "
+                            "background VEP/SpliceAI work cancelled", accepted_count + rejected_count, total_count)
             db.close()
 
     return EventSourceResponse(event_generator())

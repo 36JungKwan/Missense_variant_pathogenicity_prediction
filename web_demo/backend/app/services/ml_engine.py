@@ -1,4 +1,4 @@
-"""Suy luận TriMVPP + giải thích Integrated Gradients (mỗi lần dự đoán) và attention map (khi mở trang XAI)."""
+"""Suy luận TriMVPP; Integrated Gradients và attention map chỉ tính khi mở trang XAI."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,7 +57,6 @@ def _feature_meta(column: str) -> Tuple[str, str]:
 class PredictionOutput:
     probability: float
     label: PredictionLabel
-    ig: Dict[str, Any]
 
 
 _baseline_lock = threading.Lock()
@@ -107,8 +106,18 @@ def _raw_display(features: VariantFeatures, column: str) -> Tuple[Optional[float
     return None, "n/a (imputed)"
 
 
+@torch.inference_mode()
 def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
-    """Xác suất Pathogenic + IG full_prediction (logit trước sigmoid, baseline train3)."""
+    """Xác suất Pathogenic (FP32) so với ngưỡng tau của checkpoint. IG được tính riêng bằng explain()."""
+    values, masks = _model_inputs(loaded, features)
+    logit = float(loaded.forward_logit(**values, **masks)[0])
+    probability = float(torch.sigmoid(torch.tensor(logit)))
+    label: PredictionLabel = "Pathogenic" if probability >= loaded.threshold else "Benign"
+    return PredictionOutput(probability=round(probability, 4), label=label)
+
+
+def explain(loaded: LoadedModel, features: VariantFeatures) -> Dict[str, Any]:
+    """IG full_prediction (logit trước sigmoid, baseline train3), gọi khi mở trang XAI."""
     values, masks = _model_inputs(loaded, features)
     with timed_stage("ig"):
         ig = xai.explain_ig(
@@ -121,10 +130,7 @@ def predict(loaded: LoadedModel, features: VariantFeatures) -> PredictionOutput:
         item["name"], item["description"] = _feature_meta(item["feature"])
         item["raw_value"], item["raw_note"] = _raw_display(features, item["feature"])
     ig["features"].sort(key=lambda item: abs(item["signed"]), reverse=True)
-
-    probability = float(torch.sigmoid(torch.tensor(ig["logit"])))
-    label: PredictionLabel = "Pathogenic" if probability >= loaded.threshold else "Benign"
-    return PredictionOutput(probability=round(probability, 4), label=label, ig=ig)
+    return ig
 
 
 def attention(loaded: LoadedModel, features: VariantFeatures) -> Optional[Dict[str, Any]]:

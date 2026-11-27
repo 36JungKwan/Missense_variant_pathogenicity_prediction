@@ -89,7 +89,7 @@ The baseline is fixed and shared by all requests. It consists of the mean token 
 \[
     \sum_{i} \mathrm{IG}_i(\mathbf{x}) = f(\mathbf{x}) - f(\mathbf{x}'),
 \]
-so the remaining difference measures the approximation error. If it exceeds $5\%$ of $|f(\mathbf{x}) - f(\mathbf{x}')|$, the attributions are computed again with $128$ steps, and a warning is shown if the error is still larger. The attributions are then summed into three views: one value for each branch (DNA, Protein, Bio + SpliceAI, and Geometry), one value for each token position and allele (summed over the $1{,}280$ embedding dimensions), and one value for each tabular feature. IG is computed in the same request as the prediction and stored with it.
+so the remaining difference measures the approximation error. If it exceeds $5\%$ of $|f(\mathbf{x}) - f(\mathbf{x}')|$, the attributions are computed again with $128$ steps, and a warning is shown if the error is still larger. The attributions are then summed into three views: one value for each branch (DNA, Protein, Bio + SpliceAI, and Geometry), one value for each token position and allele (summed over the $1{,}280$ embedding dimensions), and one value for each tabular feature. IG is not part of the prediction request: it is computed the first time the explainability view of a prediction is opened and then stored with that prediction, so that later views reuse it. Single-variant and batch predictions are therefore not slowed down by the explanation.
 
 The attention maps contain the weights of all three cross-attention layers and all eight heads. In each layer, every token of a query branch distributes its attention over the concatenated tokens of the other active branches, so each row of a map sums to one. Because the maps are large (about $1$~MB for the full configuration), they are computed only when the explainability view is opened, from the stored features, and are not saved in the database. The three single-branch configurations have no cross-attention layers and are explained by IG only. Attention weights describe where a branch reads information from, not how important that information is for the prediction, so the two methods are shown side by side.
 
@@ -105,11 +105,11 @@ To keep the system fast for interactive use, extracted features and predictions 
 
 \begin{itemize}
     \item \textit{Cache hit:} a valid prediction exists for the variant and the selected configuration, and it is returned directly from the database.
-    \item \textit{Feature reuse:} valid features exist, but the prediction must be recomputed because the user changed the feature configuration, enabled \textit{Live Bypass}, or the checkpoint was updated. The stored token windows and unscaled features are reloaded, and only normalization, classification, and explanation are executed again.
+    \item \textit{Feature reuse:} valid features exist, but the prediction must be recomputed because the user changed the feature configuration, enabled \textit{Live Bypass}, or the checkpoint was updated. The stored token windows and unscaled features are reloaded, and only normalization and classification are executed again.
     \item \textit{Cache miss:} no valid features exist, and the full pipeline is executed.
 \end{itemize}
 
-On a cache miss, VEP annotation is slow but does not use the GPU. It is therefore started in a background thread while the DNA window is extracted, the SpliceAI scores are read, and NT-v1 encodes the DNA sequences, since none of these steps depends on the VEP result. Protein extraction has to wait, because the protein isoform and residue position are provided by VEP and must first pass the missense gatekeeper. The extracted features are saved before classification, so that the slow extraction does not need to be repeated if a later step fails.
+On a cache miss, the variant is first annotated by VEP and must pass the missense gatekeeper before any feature is extracted, so rejected variants use neither the GPU nor the SpliceAI archive. Only then are the DNA and protein windows built, using the protein isoform and residue position provided by VEP, encoded by NT-v1 and ESM-1b, and the SpliceAI scores read. The extracted features are saved before classification, so that the slow extraction does not need to be repeated if a later step fails.
 
 Cached results are given a version to avoid using outdated data. Features are stored with a hash of the extraction settings, such as the foundation model names, sequence and token window lengths, compute device, and numerical precision, while predictions also store the name and modification time of the checkpoint that produced them. Therefore, when one of these settings or the model changes, the affected cached results are no longer used.
 
@@ -122,20 +122,20 @@ Cached results are given a version to avoid using outdated data. Features are st
 
 \subsection{Batch Screening via Server-Sent Events}
 
-Batch screening (Fig.~\ref{fig:batch_sse}) accepts a variant file (VCF, CSV, TXT, Parquet, or Excel) or a built-in $10$-variant benchmark cohort and streams results through SSE, which avoids HTTP timeouts and shows progress in real time. Uploaded files are read with automatic detection of common column names, and duplicate variants are removed. Processing then follows three stages:
+Batch screening (Fig.~\ref{fig:batch_sse}) accepts a variant file (VCF, CSV, TXT, Parquet, or Excel) or a built-in $10$-variant benchmark cohort and streams results through SSE, which avoids HTTP timeouts and shows progress in real time. Uploaded files are read with automatic detection of common column names, and duplicate variants are removed. The variants are then processed in chunks of $64$, and each chunk passes through three stages:
 
 \begin{enumerate}
-    \item \textit{Cohort annotation:} all uncached variants are annotated in a single VEP run, which uses several processes for cohorts of more than $50$ variants, and SpliceAI scores are read for the accepted variants.
+    \item \textit{Chunk annotation:} the uncached variants of the chunk are annotated in a single VEP run, which uses several processes, and SpliceAI scores are read for the variants that pass the missense gatekeeper. Because VEP and SpliceAI use only the CPU, the next chunk is already annotated while the GPU processes the current one.
     \item \textit{Micro-batched feature extraction:} accepted variants are encoded in micro-batches of up to eight variants per foundation model forward pass. A micro-batch that exceeds the available GPU memory is automatically split in half and run again.
-    \item \textit{Classification and streaming:} each variant is classified and explained individually, and its result is sent as soon as it is ready, so the result table in the browser is updated step by step instead of waiting for the whole cohort.
+    \item \textit{Classification and streaming:} each variant is classified individually, and its result is sent as soon as it is ready, so the result table in the browser is updated step by step instead of waiting for the whole file.
 \end{enumerate}
 
-The stream uses four event types: a classified variant, a variant skipped by the gatekeeper or coordinate validation, completion of the cohort with final statistics, and a system-level error. A single invalid variant is therefore reported with the reason, and the rest of the cohort continues to run.
+Results therefore start to appear after the first chunk instead of after the whole file has been annotated. The stream uses five event types: the current stage of each chunk, a classified variant, a variant skipped by the gatekeeper or coordinate validation, completion of the run with final statistics, and a system-level error. A single invalid variant is therefore reported with the reason, and the rest of the file continues to run. When the user stops the screening or leaves the page, the connection is closed and the backend cancels all remaining work: the running VEP process is terminated inside its container and no further chunk is processed. While a screening is running, the interface asks for confirmation before the user leaves the page.
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.95\textwidth]{figures/5.3.png}
-    \caption{Batch screening workflow with micro-batched inference and SSE streaming.}
+    \caption{Batch screening workflow with chunked annotation, micro-batched inference, and SSE streaming.}
     \label{fig:batch_sse}
 \end{figure}
 
@@ -157,7 +157,7 @@ The PostgreSQL database consists of three tables linked by foreign keys with cas
         \addlinespace
         \texttt{inference\_features} & One record per variant & DNA and protein token windows, four $1{,}280$-dimensional central-token embeddings, unscaled tabular features, VEP annotation, and hash of the extraction settings \\
         \addlinespace
-        \texttt{predictions} & Up to seven records per variant & Probability, label, AlphaMissense and REVEL scores, Integrated Gradients attributions, and model version \\
+        \texttt{predictions} & Up to seven records per variant & Probability, label, AlphaMissense and REVEL scores, Integrated Gradients attributions (added when first requested), and model version \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -187,7 +187,7 @@ The system uses a hybrid deployment: PostgreSQL and the offline VEP service run 
 \section{Web Interface}
 \label{sec:web_interface}
 
-The web interface (Fig.~\ref{fig:web_interface}) provides four views. The overview page (a) introduces the system and links to each module. The single-variant view (b) accepts a GRCh38 coordinate and the three feature switches, and displays the predicted probability and label together with ClinVar, AlphaMissense, and REVEL; the test-set MCC of the selected configuration is shown below the switches, and a \textit{Live Bypass} option makes the system compute the prediction again. The batch view (c) shows the streaming progress, the numbers of accepted and rejected variants, and a live table of the variants that are most likely to be pathogenic. The explainability view (d) presents the Integrated Gradients attributions of a selected variant for each branch, token position, and tabular feature, together with the completeness error, and (e) the cross-attention maps, in which the user selects the query branch, layer, and head and can list the most-attended tokens of any query token. When a result is opened in another view, its variant and feature configuration are kept.
+The web interface (Fig.~\ref{fig:web_interface}) provides four views. The overview page (a) introduces the system and links to each module. The single-variant view (b) accepts a GRCh38 coordinate and the three feature switches, and displays the predicted probability and label together with ClinVar, AlphaMissense, and REVEL; the test-set MCC of the selected configuration is shown below the switches, and a \textit{Live Bypass} option makes the system compute the prediction again. The batch view (c) shows the streaming progress with the current chunk stage and the elapsed and estimated remaining time, the numbers of accepted and rejected variants, and a live table of the variants that are most likely to be pathogenic; all results can be exported as a CSV file. The explainability view (d) presents the Integrated Gradients attributions of a selected variant for each branch, token position, and tabular feature, together with the completeness error, and (e) the cross-attention maps, in which the user selects the query branch, layer, and head and can list the most-attended tokens of any query token. When a result is opened in another view, its variant and feature configuration are kept.
 
 \begin{figure}[htbp]
     \centering
@@ -219,23 +219,24 @@ The web interface (Fig.~\ref{fig:web_interface}) provides four views. The overvi
 \section{Latency Evaluation}
 \label{sec:latency}
 
-Latency was measured on a workstation with an AMD Ryzen~7 8745H CPU, 32~GB of RAM, and an NVIDIA GeForce RTX 4060 Laptop GPU (8~GB VRAM) running Windows~11, with all foundation models in FP16. Loading the models and reference resources at startup takes approximately $10$~s and $2.3$~GiB of GPU memory and is excluded from the measurements. Latency was recorded by the backend, from the time a request is received until the response is created, with one user sending requests one after another on the $10$-variant benchmark cohort (Table~\ref{tab:latency_benchmarks}). Each scenario was repeated three times over the cohort (ten times for cache hits) after a warm-up run, and the median is reported. For batch screening, the total is the time until the stream completes, and for the explainability view the time until the response is received, both measured by the client. Feature reuse refers to the full configuration unless stated otherwise. Except for these two scenarios, the reported values therefore do not include JSON conversion and network transfer. None of them include browser display time, and they apply only to this hardware configuration.
+Latency was measured on a workstation with an AMD Ryzen~7 8745H CPU, 32~GB of RAM, and an NVIDIA GeForce RTX 4060 Laptop GPU (8~GB VRAM) running Windows~11, with all foundation models in FP16. Loading the models and reference resources at startup takes approximately $10$~s and $2.3$~GiB of GPU memory and is excluded from the measurements. Latency was recorded by the backend, from the time a request is received until the response is created, with one user sending requests one after another on the $10$-variant benchmark cohort (Table~\ref{tab:latency_benchmarks}). Each scenario was repeated three times over the cohort (ten times for cache hits) after a warm-up run, and the median is reported. For batch screening, the total is the time until the stream completes, and for the explainability view the time until the response is received, both measured by the client; the first opening of the explainability view was measured after the stored attributions had been removed. Feature reuse refers to the full configuration unless stated otherwise. Except for these two scenarios, the reported values therefore do not include JSON conversion and network transfer. None of them include browser display time, and they apply only to this hardware configuration.
 
 \begin{table}[htbp]
     \centering
     \caption{Server-side processing latency across execution paths on the reference workstation.}
     \label{tab:latency_benchmarks}
-    \begin{tabular}{llr}
+    \begin{tabular}{p{0.33\textwidth}p{0.33\textwidth}r}
         \toprule
         \textbf{Scenario} & \textbf{Execution path} & \textbf{Latency} \\
         \midrule
-        Single new variant & Full cache miss & 3.54 s / variant \\
-        Batch cohort ($10$ variants) & Full cache miss & 10.9 s total \\
-        Configuration change / Live Bypass & Feature reuse & 0.33 s / query \\
+        Single new variant & Full cache miss & 3.43 s / variant \\
+        Batch cohort ($10$ variants) & Full cache miss & 8.6 s total \\
+        Configuration change / Live Bypass & Feature reuse & 66 ms / query \\
         Repeated query & Full cache hit & 18 ms / query \\
-        Opening the explainability view & Cached prediction + attention & 0.15 s / query \\
+        Explainability view, first opening & Cached prediction, IG + attention & 0.48 s / query \\
+        Explainability view, later openings & Cached prediction and IG, attention & 0.14 s / query \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-Batch processing reduces the average cost to $1.09$~s per variant, which is $3.3\times$ faster than sending single-variant requests one by one, mainly because VEP is run once for the whole cohort and the foundation models process several variants per forward pass. For a new variant, VEP annotation ($2.8$~s) accounts for about $80\%$ of the time, while the Integrated Gradients computation takes only $0.26$~s. Once a variant's features are stored, recomputing the full configuration takes $0.33$~s, the two-branch configurations take $0.24$--$0.25$~s, and the single-branch configurations take less than $0.1$~s at the median, most of which is used by Integrated Gradients. Opening the explainability view of a cached prediction takes $0.15$~s for the full configuration, including the computation and transfer of the attention maps. Repeated queries are answered in $18$~ms, which is fast enough for interactive use.
+Batch processing reduces the average cost to $0.86$~s per variant, which is $4.0\times$ faster than sending single-variant requests one by one, mainly because VEP is run once per chunk and the foundation models process several variants per forward pass. For larger files, the overlap between the annotation of one chunk and the GPU processing of the previous one reduces the cost further: a file of $150$ new variants showed its first results after $29$~s and was completed in $72$~s ($0.48$~s per variant). For a new single variant, VEP annotation ($2.85$~s) accounts for about $83\%$ of the time, followed by the DNA and protein foundation models ($0.19$~s and $0.18$~s) and the SpliceAI lookup ($0.12$~s). Once a variant's features are stored, changing the configuration only repeats normalization and classification, which takes $66$~ms for the full configuration and $26$--$74$~ms for the other six. Because Integrated Gradients is computed only when needed, the first opening of the explainability view takes $0.48$~s for the full configuration, of which $0.29$~s is spent on Integrated Gradients, $0.30$~s for a two-branch configuration, and $0.10$~s for a single-branch one; later openings take $0.04$--$0.14$~s because the attributions are read from the database. Repeated queries are answered in $18$~ms, which is fast enough for interactive use.

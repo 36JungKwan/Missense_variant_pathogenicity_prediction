@@ -91,7 +91,8 @@ export interface VariantData {
   clinvar_ground_truth: ClinVarLabel
   results: ModelResults
   sota: SOTAResults
-  ig_analysis: IgAnalysis
+  /** null: IG chưa được tính (chỉ tính khi mở trang XAI). */
+  ig_analysis: IgAnalysis | null
 }
 
 export interface VariantPreset extends VariantData {
@@ -109,7 +110,7 @@ export interface BatchVariant {
   clinvar_ground_truth: ClinVarLabel
   sota_alphamissense: number | null
   danger_rank: number
-  isNewStreamItem?: boolean
+
 }
 
 /**
@@ -159,6 +160,7 @@ export interface SingleVariantResponse extends VariantData {
 
 /** GET /xai: attention = null khi tổ hợp chỉ có một nhánh (không có cross-attention). */
 export interface XaiResponse extends SingleVariantResponse {
+  ig_analysis: IgAnalysis
   attention: AttentionMaps | null
 }
 
@@ -166,7 +168,7 @@ export interface XaiResponse extends SingleVariantResponse {
 export type NavOrigin = "single" | "batch"
 
 export interface BatchStreamEvent {
-  type: "variant_stream" | "variant_skipped" | "stream_completed" | "stream_error"
+  type: "variant_stream" | "variant_skipped" | "stream_status" | "stream_completed" | "stream_error"
   progress_percent: number
   variant?: BatchVariant
   variant_id?: string
@@ -178,6 +180,12 @@ export interface BatchStreamEvent {
     missense_accepted: number
     non_missense_rejected: number
   }
+  /** stream_status: annotating = VEP + SpliceAI, classifying = FM + dự đoán */
+  stage?: "annotating" | "classifying"
+  status?: string
+  chunk?: number
+  total_chunks?: number
+  total_variants?: number
 }
 
 /** Dạng lỗi thống nhất của backend: {"detail": {...}}. */

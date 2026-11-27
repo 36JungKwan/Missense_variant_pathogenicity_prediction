@@ -16,7 +16,7 @@ class BatchVariant(BaseModel):
 
 
 class BatchStreamEvent(BaseModel):
-    type: Literal["variant_stream", "variant_skipped", "stream_completed", "stream_error"]
+    type: Literal["variant_stream", "variant_skipped", "stream_status", "stream_completed", "stream_error"]
     progress_percent: int
     variant: Optional[BatchVariant] = None
     variant_id: Optional[str] = None
@@ -24,3 +24,9 @@ class BatchStreamEvent(BaseModel):
     reason: Optional[str] = None
     error_code: Optional[str] = None
     summary: Optional[Dict[str, int]] = None
+    # stream_status: tiến độ theo khối (annotating = VEP + SpliceAI, classifying = FM + dự đoán)
+    stage: Optional[Literal["annotating", "classifying"]] = None
+    status: Optional[str] = None
+    chunk: Optional[int] = None
+    total_chunks: Optional[int] = None
+    total_variants: Optional[int] = None

@@ -236,8 +236,8 @@ def build_features(
     spliceai: Optional[Dict[str, float]] = None,
     dna: Optional[TokenWindow] = None,
 ) -> VariantFeatures:
-    """Toàn bộ khâu trích xuất cho một biến thể missense. `dna`/`spliceai` có thể được tính trước
-    (song song với VEP) để không phải tính lại."""
+    """Toàn bộ khâu trích xuất cho một biến thể đã qua Missense Gatekeeper. `spliceai` có thể được tra sẵn
+    (Batch tra theo khối) để không phải tra lại."""
     prot_input = protein_inputs(variant, vep)
     if dna is None:
         dna = fm_hub.embed("dna", *dna_inputs(variant))

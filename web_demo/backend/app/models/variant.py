@@ -39,8 +39,9 @@ class Prediction(Base):
     sota_alphamissense = Column(Float, nullable=True)
     sota_revel = Column(Float, nullable=True)
     
-    # Integrated Gradients (full_prediction) của checkpoint ứng với mask này: theo nhánh, token, đặc trưng
-    ig_values = Column(JSONB, nullable=False)
+    # Integrated Gradients (full_prediction) của checkpoint ứng với mask này: theo nhánh, token, đặc trưng.
+    # NULL cho tới khi trang XAI của biến thể được mở lần đầu (tính khi cần rồi lưu lại).
+    ig_values = Column(JSONB, nullable=True)
 
     # Định danh checkpoint đã sinh ra dòng này ("<file>.pth@<mtime>"); NULL = dữ liệu seed/mock cũ.
     model_tag = Column(String(128), nullable=True)

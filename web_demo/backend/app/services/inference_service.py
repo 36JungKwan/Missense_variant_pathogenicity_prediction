@@ -1,10 +1,10 @@
-"""Điều phối suy luận: VEP -> gatekeeper -> đặc trưng -> checkpoint -> Integrated Gradients -> PostgreSQL.
-Attention map chỉ tính khi mở trang XAI (không lưu)."""
+"""Điều phối suy luận: VEP -> gatekeeper -> đặc trưng -> checkpoint -> PostgreSQL.
+Integrated Gradients và attention map chỉ tính khi mở trang XAI (IG được lưu lại, attention thì không)."""
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -20,8 +20,8 @@ from app.core.constants import (
     normalize_clinvar_label,
     parse_variant_id,
 )
-from app.core.errors import InvalidVariantError, NonMissenseVariantError, PipelineError
-from app.core.log import format_timings, run_in_context, stage_scope, timed_stage
+from app.core.errors import BatchCancelledError, InvalidVariantError, NonMissenseVariantError, PipelineError
+from app.core.log import format_timings, stage_scope, timed_stage
 from app.models.variant import InferenceFeature, Prediction, Variant
 from app.schemas.common import AttentionMaps, IgAnalysis, ModelResults, SotaScores, TriMVPPScore
 from app.schemas.single import InferenceMeta, SingleVariantRequest, SingleVariantResponse, XaiResponse
@@ -33,8 +33,6 @@ from app.services.feature_pipeline import (
     VariantFeatures,
     build_features,
     build_features_batch,
-    dna_inputs,
-    fm_hub,
     lookup_spliceai,
     refresh_imputed_geometry,
 )
@@ -42,8 +40,6 @@ from app.services.vep_runner import VepRecord, annotate_variants, ensure_missens
 
 logger = logging.getLogger("app.services.inference")
 
-# VEP là tiến trình con (docker exec) nên chạy được song song với NT-DNA + SpliceAI trên luồng chính.
-_vep_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="vep")
 
 
 @dataclass
@@ -96,7 +92,8 @@ def _refresh_stale_geometry(db: Session, row: InferenceFeature) -> None:
     db.commit()
 
 
-def prefetch_annotations(db: Session, keys: Sequence[VariantKey]) -> Prefetched:
+def prefetch_annotations(db: Session, keys: Sequence[VariantKey],
+                         cancel_event: Optional[threading.Event] = None) -> Prefetched:
     """Chạy VEP một lần cho các biến thể chưa có đặc trưng trong DB, rồi tra SpliceAI cho các missense."""
     with timed_stage("db"):
         stored = {row.variant_id for row in db.query(InferenceFeature.variant_id).filter(
@@ -104,7 +101,9 @@ def prefetch_annotations(db: Session, keys: Sequence[VariantKey]) -> Prefetched:
             InferenceFeature.extractor_tag == EXTRACTOR_TAG,
         )}
     pending = [k for k in keys if k.variant_id not in stored]
-    vep = annotate_variants(pending)
+    vep = annotate_variants(pending, cancel_event=cancel_event)
+    if cancel_event is not None and cancel_event.is_set():
+        raise BatchCancelledError("Batch screening was stopped by the user.")
     missense = [k for k in pending if vep[k.variant_id].is_missense and len(k.ref) == 1 and len(k.alt) == 1]
     return Prefetched(vep=vep, spliceai=lookup_spliceai(missense))
 
@@ -168,36 +167,15 @@ def _load_stored(db: Session, variant_id: str) -> Tuple[Variant, InferenceFeatur
     return variant, row
 
 
-def _annotate_with_overlap(key: VariantKey) -> Tuple[VepRecord, Optional[TokenWindow], Optional[Dict[str, float]]]:
-    """VEP (tiến trình con) chạy song song với NT-DNA + SpliceAI, vốn chỉ cần toạ độ biến thể."""
-    vep_future = _vep_executor.submit(run_in_context(annotate_variants), [key])
-    dna: Optional[TokenWindow] = None
-    spliceai: Optional[Dict[str, float]] = None
-    dna_error: Optional[InvalidVariantError] = None
-    try:
-        try:
-            dna = fm_hub.embed("dna", *dna_inputs(key))
-            spliceai = lookup_spliceai([key])[key.variant_id]
-        except InvalidVariantError as exc:  # báo sau gatekeeper để giữ thứ tự lỗi như trước
-            dna_error = exc
-        record = vep_future.result()[key.variant_id]
-    except BaseException:
-        vep_future.cancel()
-        raise
-    ensure_missense(record)
-    if dna_error is not None:
-        raise dna_error
-    return record, dna, spliceai
-
-
 def _extract_and_store(db: Session, key: VariantKey, prefetched: Optional[Prefetched]) -> Tuple[Variant, InferenceFeature]:
+    """Thứ tự cố định: VEP -> Missense Gatekeeper -> (chỉ khi là missense) cửa sổ + NT-v1 + ESM-1b + SpliceAI.
+    Biến thể bị loại không tốn GPU/SpliceAI."""
     record = prefetched.vep.get(key.variant_id) if prefetched else None
-    if record is not None:
-        ensure_missense(record)
-        features = build_features(key, record, spliceai=prefetched.spliceai.get(key.variant_id))
-    else:
-        record, dna, spliceai = _annotate_with_overlap(key)
-        features = build_features(key, record, spliceai=spliceai, dna=dna)
+    if record is None:
+        record = annotate_variants([key])[key.variant_id]
+    ensure_missense(record)
+    spliceai = prefetched.spliceai.get(key.variant_id) if prefetched else None
+    features = build_features(key, record, spliceai=spliceai)
     with timed_stage("db"):
         _store_features(db, key, record, features)
         # Commit ngay: nếu bước suy luận phía sau lỗi thì không phải chạy lại VEP + FM.
@@ -277,7 +255,7 @@ def _response(
         clinvar_ground_truth=normalize_clinvar_label(variant.clinvar_ground_truth),
         results=ModelResults(trimvpp=TriMVPPScore(probability=prediction.trimvpp_prob, label=prediction.classification)),
         sota=SotaScores(alphamissense=prediction.sota_alphamissense, revel=prediction.sota_revel),
-        ig_analysis=IgAnalysis(**prediction.ig_values),
+        ig_analysis=IgAnalysis(**prediction.ig_values) if prediction.ig_values else None,
         meta=InferenceMeta(
             is_cache_hit=is_cache_hit,
             computation_time_ms=max(1, int((time.perf_counter() - started) * 1000)),
@@ -341,7 +319,7 @@ def run_single_variant_inference(
             annotation = feature_row.annotation or {}
             warnings = list(features.warnings) + _sota_warnings(annotation)
 
-            # 3) Suy luận TriMVPP + Integrated Gradients.
+            # 3) Suy luận TriMVPP (IG được tính sau, khi mở trang XAI).
             output = ml_engine.predict(loaded, features)
 
             # 4) Upsert bảng predictions theo unique index ix_variant_mask (variant_id, ablation_mask):
@@ -353,7 +331,7 @@ def run_single_variant_inference(
                 "classification": output.label,
                 "sota_alphamissense": annotation.get("alphamissense"),
                 "sota_revel": annotation.get("revel"),
-                "ig_values": output.ig,
+                "ig_values": None,
                 "model_tag": _prediction_tag(loaded),
             }
             with timed_stage("db"):
@@ -370,17 +348,30 @@ def run_single_variant_inference(
 
 
 def run_xai(db: Session, request: SingleVariantRequest) -> XaiResponse:
-    """Dự đoán + IG (đọc cache predictions hoặc tính mới), rồi tính attention map từ đặc trưng đã lưu."""
+    """Dự đoán (cache hoặc tính mới) + Integrated Gradients (tính lần đầu rồi lưu) + attention map (không lưu)."""
     result = run_single_variant_inference(db=db, request=request)
     loaded = resolve_model(result.meta.ablation_mask)
-    attention = None
-    if len(loaded.model.cross_layers) > 0:
-        with stage_scope() as timings:
+    with stage_scope() as timings:
+        with timed_stage("db"):
+            row = _stored_features(db, result.variant_id)
+        if row is None:
+            raise PipelineError(f"Stored features for {result.variant_id} disappeared during the XAI request.")
+        features = _to_features(row)
+
+        if result.ig_analysis is None:
+            ig = ml_engine.explain(loaded, features)
             with timed_stage("db"):
-                row = _stored_features(db, result.variant_id)
-            if row is None:
-                raise PipelineError(f"Stored features for {result.variant_id} disappeared during the XAI request.")
-            maps = ml_engine.attention(loaded, _to_features(row))
-        attention = AttentionMaps(**maps)
-        result.meta.timings_ms.update({k: v for k, v in timings.items() if k == "attn"})
+                db.query(Prediction).filter(
+                    Prediction.variant_id == result.variant_id,
+                    Prediction.ablation_mask == result.meta.ablation_mask,
+                    Prediction.model_tag == _prediction_tag(loaded),
+                ).update({Prediction.ig_values: ig}, synchronize_session=False)
+                db.commit()
+            result.ig_analysis = IgAnalysis(**ig)
+
+        attention = None
+        if len(loaded.model.cross_layers) > 0:
+            attention = AttentionMaps(**ml_engine.attention(loaded, features))
+    result.meta.timings_ms.update({k: v for k, v in timings.items() if k in ("ig", "attn")})
+    logger.info("xai variant=%s mask=%d %s", result.variant_id, result.meta.ablation_mask, format_timings(timings))
     return XaiResponse(**result.model_dump(), attention=attention)

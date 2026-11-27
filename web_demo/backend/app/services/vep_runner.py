@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -12,7 +13,7 @@ from typing import Dict, List, Optional, Sequence
 
 from app.core.config import settings
 from app.core.constants import BIO_CORE_COLUMNS, VariantKey
-from app.core.errors import NonMissenseVariantError, VepUnavailableError
+from app.core.errors import BatchCancelledError, NonMissenseVariantError, VepUnavailableError
 from app.core.log import timed_stage
 
 logger = logging.getLogger("app.services.vep_runner")
@@ -125,8 +126,37 @@ def _parse_row(row: Dict[str, str]) -> VepRecord:
     return record
 
 
-def annotate_variants(variants: Sequence[VariantKey]) -> Dict[str, VepRecord]:
-    """Chạy VEP một lần cho cả danh sách; trả về {variant_id: VepRecord}."""
+def _kill_container_job(job: str) -> None:
+    """`docker exec` bị kill không dừng tiến trình bên trong container -> pkill theo tên job (duy nhất)."""
+    try:
+        subprocess.run(["docker", "exec", settings.VEP_CONTAINER_NAME, "pkill", "-f", job],
+                       capture_output=True, timeout=15)
+    except Exception:  # noqa: BLE001 - dọn dẹp tốt nhất có thể
+        logger.warning("Could not stop VEP job %s inside the container", job)
+
+
+def _run_cancellable(command: List[str], job: str, cancel_event: Optional[threading.Event]):
+    """Như subprocess.run nhưng kiểm tra cancel_event mỗi 0,5 s; huỷ thì kill cả client lẫn job trong container."""
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.perf_counter() + settings.VEP_TIMEOUT_SECONDS
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.5)
+            return proc.returncode, stdout, stderr
+        except subprocess.TimeoutExpired:
+            cancelled = cancel_event is not None and cancel_event.is_set()
+            if cancelled or time.perf_counter() > deadline:
+                proc.kill()
+                proc.communicate()
+                _kill_container_job(job)
+                if cancelled:
+                    raise BatchCancelledError("Batch screening was stopped by the user.")
+                raise subprocess.TimeoutExpired(command, settings.VEP_TIMEOUT_SECONDS)
+
+
+def annotate_variants(variants: Sequence[VariantKey],
+                      cancel_event: Optional[threading.Event] = None) -> Dict[str, VepRecord]:
+    """Chạy VEP một lần cho cả danh sách; trả về {variant_id: VepRecord}. cancel_event: dừng ngay khi được set."""
     if not variants:
         return {}
     tmp_dir = Path(settings.VEP_TMP_DIR)
@@ -150,15 +180,15 @@ def annotate_variants(variants: Sequence[VariantKey]) -> Dict[str, VepRecord]:
     try:
         try:
             with timed_stage("vep"):
-                proc = subprocess.run(command, capture_output=True, text=True, timeout=settings.VEP_TIMEOUT_SECONDS)
+                returncode, stdout, stderr = _run_cancellable(command, job, cancel_event)
         except FileNotFoundError as exc:
             raise VepUnavailableError("Docker CLI not found on PATH; cannot run Ensembl VEP.") from exc
         except subprocess.TimeoutExpired as exc:
             raise VepUnavailableError(f"VEP timed out after {settings.VEP_TIMEOUT_SECONDS}s.") from exc
-        if proc.returncode != 0 or not host_out.is_file():
-            tail = (proc.stderr or proc.stdout or "").strip()[-600:]
+        if returncode != 0 or not host_out.is_file():
+            tail = (stderr or stdout or "").strip()[-600:]
             raise VepUnavailableError(
-                f"VEP container '{settings.VEP_CONTAINER_NAME}' failed (exit {proc.returncode}). "
+                f"VEP container '{settings.VEP_CONTAINER_NAME}' failed (exit {returncode}). "
                 f"Is Docker Desktop running and the container started? {tail}"
             )
 

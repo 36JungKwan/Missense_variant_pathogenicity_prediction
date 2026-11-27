@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     FM_CUDA_DTYPE: str = "fp16"
     # Số biến thể gộp vào một forward pass khi chạy Batch VCF (mỗi biến thể = 2 chuỗi: ref, alt).
     FM_BATCH_VARIANTS: int = 8
+    # Batch Screening chia file thành các khối: VEP + SpliceAI + FM + dự đoán theo từng khối, kết quả gửi ngay;
+    # VEP của khối kế tiếp chạy song song với phần GPU của khối hiện tại.
+    BATCH_CHUNK_VARIANTS: int = 64
     HF_HOME: Optional[str] = None  # nơi lưu trọng số HuggingFace (nên đặt trên ổ còn trống)
 
     # --- Artifact của nhóm ---

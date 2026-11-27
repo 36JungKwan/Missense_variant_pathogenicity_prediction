@@ -49,29 +49,19 @@
   <rect x="35" y="240" width="270" height="80" rx="18" fill="#d5f5e3" stroke="#1e8449" stroke-width="2.5" />
   <text x="170" y="288" font-size="23" font-weight="bold" text-anchor="middle" fill="#145a32">Cached Result</text>
 
-  <!-- Miss -> fork -->
-  <line x1="620" y1="250" x2="620" y2="305" stroke="#1f4e79" stroke-width="3" />
-  <rect x="587" y="259" width="66" height="34" rx="4" fill="#ffffff" stroke="#1f4e79" stroke-width="1.5" />
-  <text x="620" y="284" font-size="22" font-weight="bold" text-anchor="middle" fill="#1f4e79">Miss</text>
-  <line x1="472" y1="305" x2="747" y2="305" stroke="#1f4e79" stroke-width="3" />
-  <line x1="472" y1="305" x2="472" y2="341" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
-  <line x1="747" y1="305" x2="747" y2="341" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
+  <!-- Miss -> [3] VEP -> [4] Gatekeeper (gatekeeper trước khi trích xuất đặc trưng) -->
+  <line x1="620" y1="250" x2="620" y2="341" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
+  <rect x="587" y="270" width="66" height="34" rx="4" fill="#ffffff" stroke="#1f4e79" stroke-width="1.5" />
+  <text x="620" y="295" font-size="22" font-weight="bold" text-anchor="middle" fill="#1f4e79">Miss</text>
 
-  <!-- [3] || [4] -->
-  <rect x="345" y="345" width="255" height="80" rx="8" fill="#fef5e7" stroke="#e67e22" stroke-width="2" stroke-dasharray="6,4" />
-  <text x="472" y="393" font-size="23" font-weight="bold" text-anchor="middle" fill="#7e5109">[3] VEP Annotation</text>
-  <rect x="630" y="345" width="235" height="80" rx="8" fill="#ffffff" stroke="#1f4e79" stroke-width="2" />
-  <text x="747" y="379" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[4] NT-v1 + SpliceAI</text>
-  <text x="747" y="409" font-size="21" text-anchor="middle" fill="#5d6d7e">1,001 bp window</text>
+  <rect x="410" y="345" width="420" height="80" rx="8" fill="#fef5e7" stroke="#e67e22" stroke-width="2" stroke-dasharray="6,4" />
+  <text x="620" y="379" font-size="23" font-weight="bold" text-anchor="middle" fill="#7e5109">[3] VEP Annotation</text>
+  <text x="620" y="409" font-size="21" text-anchor="middle" fill="#5d6d7e">consequence, transcript, bio features</text>
+  <line x1="620" y1="425" x2="620" y2="486" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
 
-  <line x1="472" y1="425" x2="472" y2="455" stroke="#1f4e79" stroke-width="3" />
-  <line x1="747" y1="425" x2="747" y2="455" stroke="#1f4e79" stroke-width="3" />
-  <line x1="472" y1="455" x2="747" y2="455" stroke="#1f4e79" stroke-width="3" />
-  <line x1="620" y1="455" x2="620" y2="486" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
-
-  <!-- [5] Gatekeeper -->
+  <!-- [4] Gatekeeper -->
   <polygon points="620,490 760,550 620,610 480,550" fill="#fff9e6" stroke="#d68910" stroke-width="2.5" />
-  <text x="620" y="545" font-size="23" font-weight="bold" text-anchor="middle" fill="#7e5109">[5] Missense</text>
+  <text x="620" y="545" font-size="23" font-weight="bold" text-anchor="middle" fill="#7e5109">[4] Missense</text>
   <text x="620" y="573" font-size="23" font-weight="bold" text-anchor="middle" fill="#7e5109">Gatekeeper</text>
 
   <line x1="480" y1="550" x2="305" y2="550" stroke="#c0392b" stroke-width="3" marker-end="url(#arrow-reject)" />
@@ -82,32 +72,32 @@
 
   <line x1="620" y1="610" x2="620" y2="646" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
 
-  <!-- [6] -> [9] -->
+  <!-- [5] -> [8] -->
   <rect x="410" y="650" width="420" height="80" rx="8" fill="#ffffff" stroke="#1f4e79" stroke-width="2" />
-  <text x="620" y="684" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[6] ESM-1b Protein</text>
-  <text x="620" y="714" font-size="21" text-anchor="middle" fill="#5d6d7e">501 aa window</text>
+  <text x="620" y="684" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[5] NT-v1 + ESM-1b + SpliceAI</text>
+  <text x="620" y="714" font-size="21" text-anchor="middle" fill="#5d6d7e">1,001 bp / 501 aa windows</text>
   <line x1="620" y1="730" x2="620" y2="766" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
 
   <rect x="410" y="770" width="420" height="60" rx="8" fill="#ffffff" stroke="#1f4e79" stroke-width="2" />
-  <text x="620" y="808" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[7] Geometry &amp; Save Features</text>
+  <text x="620" y="808" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[6] Geometry &amp; Save Features</text>
   <line x1="830" y1="800" x2="960" y2="800" stroke="#7f8c8d" stroke-width="2" stroke-dasharray="12,4,2,4" marker-end="url(#arrow-db)" />
   <rect x="960" y="765" width="210" height="70" rx="6" fill="#ffffff" stroke="#8e44ad" stroke-width="2" />
   <text x="1065" y="808" font-size="23" text-anchor="middle" fill="#512e5f">Save features</text>
   <line x1="620" y1="830" x2="620" y2="866" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
 
   <rect x="410" y="870" width="420" height="60" rx="8" fill="#ffffff" stroke="#1f4e79" stroke-width="2" />
-  <text x="620" y="908" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[8] Classify + IG</text>
+  <text x="620" y="908" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[7] Classify</text>
   <line x1="620" y1="930" x2="620" y2="966" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
 
   <rect x="410" y="970" width="420" height="60" rx="8" fill="#ffffff" stroke="#1f4e79" stroke-width="2" />
-  <text x="620" y="1008" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[9] Save &amp; Respond</text>
+  <text x="620" y="1008" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">[8] Save &amp; Respond</text>
   <line x1="830" y1="1000" x2="960" y2="1000" stroke="#7f8c8d" stroke-width="2" stroke-dasharray="12,4,2,4" marker-end="url(#arrow-db)" />
   <rect x="960" y="965" width="210" height="70" rx="6" fill="#ffffff" stroke="#8e44ad" stroke-width="2" />
   <text x="1065" y="1008" font-size="23" text-anchor="middle" fill="#512e5f">Save prediction</text>
 
   <line x1="410" y1="1000" x2="305" y2="1000" stroke="#1f4e79" stroke-width="3" marker-end="url(#arrow-miss)" />
   <rect x="35" y="960" width="270" height="80" rx="18" fill="#d9eaf7" stroke="#1f4e79" stroke-width="2.5" />
-  <text x="170" y="1008" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">Show Result + IG</text>
+  <text x="170" y="1008" font-size="23" font-weight="bold" text-anchor="middle" fill="#1f4e79">Show Result</text>
 
   <!-- Feature reuse (drawn last) -->
   <polyline points="695,215 880,215 880,900 834,900" fill="none" stroke="#d35400" stroke-width="3.5" stroke-dasharray="10,6" marker-end="url(#arrow-reuse)" />

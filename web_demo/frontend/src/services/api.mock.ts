@@ -168,7 +168,7 @@ function mockAttention(variantId: string, flags: AblationFlags): AttentionMaps |
 }
 
 /** Mô phỏng ảnh hưởng của việc tắt từng nhánh lên xác suất + IG giả lập. */
-function simulateAblation(base: BaseVariant, flags: AblationFlags): VariantData {
+function simulateAblation(base: BaseVariant, flags: AblationFlags): VariantData & { ig_analysis: IgAnalysis } {
   let prob = base.results.trimvpp.probability
   const dir = prob >= 0.5 ? 1 : -1
   if (!flags.protein_enabled) prob -= dir * 0.14
