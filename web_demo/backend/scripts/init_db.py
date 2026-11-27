@@ -45,6 +45,8 @@ def init_db():
     # Nâng cấp không phá dữ liệu cho database đã tồn tại (create_all không thêm cột vào bảng cũ).
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS model_tag VARCHAR(128);"))
+        # IG chỉ tính khi mở trang XAI -> cột được phép NULL.
+        conn.execute(text("ALTER TABLE predictions ALTER COLUMN ig_values DROP NOT NULL;"))
         # Bảng 768 chiều của pipeline mock cũ; pipeline Pure DL dùng inference_features (1280 chiều).
         conn.execute(text("DROP TABLE IF EXISTS extracted_features;"))
         conn.commit()

@@ -89,3 +89,9 @@ class NonMissenseVariantError(PipelineError):
 
 def error_body(error_code: str, message: str, request_id: str, **extra: Any) -> Dict[str, Any]:
     return {"detail": {"error_code": error_code, "message": message, "request_id": request_id, **extra}}
+
+
+class BatchCancelledError(PipelineError):
+    """Người dùng bấm Stop / đóng kết nối: dừng VEP, SpliceAI và các khối chưa xử lý."""
+    status_code = 499
+    error_code = "CANCELLED"

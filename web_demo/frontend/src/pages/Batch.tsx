@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react"
-import { useNavigate } from "react-router-dom"
+import { useBlocker, useNavigate } from "react-router-dom"
 import {
   Play,
   Square,
@@ -14,6 +14,8 @@ import {
   Download,
   UploadCloud,
   ChevronRight,
+  Loader2,
+  Timer,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -36,6 +38,20 @@ import { createVcfStreamService, BatchStreamEvent } from "@/services/api"
 const STORAGE_KEY = "trimvpp_batch_state"
 const ACCEPTED_EXTENSIONS = [".vcf", ".csv", ".txt", ".parquet", ".xlsx"]
 const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.join(",")
+/** Bảng chỉ vẽ N dòng mới nhất cho nhẹ; CSV xuất đủ toàn bộ kết quả. */
+const TABLE_ROW_LIMIT = 500
+const LEAVE_WARNING = "Batch screening is still running. Leaving this page will stop it. Leave anyway?"
+
+const currentTimeMs = () => Date.now()
+
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+}
 
 export const Batch: React.FC = () => {
   const navigate = useNavigate()
@@ -78,20 +94,70 @@ export const Batch: React.FC = () => {
     typeof savedState?.runMask === "number" ? savedState.runMask : ablationStateToMask(ablation)
   )
   const [isDragging, setIsDragging] = useState<boolean>(false)
+  // Trạng thái theo khối do backend gửi (stream_status) + đồng hồ để hiện thời gian đã chạy / còn lại.
+  const [statusText, setStatusText] = useState<string | null>(null)
+  const [totalVariants, setTotalVariants] = useState<number | null>(null)
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [now, setNow] = useState<number>(currentTimeMs)
+  const [newestId, setNewestId] = useState<number | null>(null)
 
   const streamServiceRef = useRef<{ cancel: () => void } | null>(null)
 
-  // --- 3. Lưu State vào SessionStorage mỗi khi có thay đổi ---
+  // --- 3. Lưu State vào SessionStorage (gộp ghi khi đang stream để không serialize hàng nghìn dòng mỗi sự kiện) ---
   useEffect(() => {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-      progress,
-      stats,
-      streamedVariants,
-      dangerQueue,
-      ablation,
-      runMask,
-    }))
-  }, [progress, stats, streamedVariants, dangerQueue, ablation, runMask])
+    const save = () => {
+      const snapshot = { progress, stats, streamedVariants, dangerQueue, ablation, runMask }
+      try {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+      } catch {
+        try {
+          // Vượt dung lượng sessionStorage: chỉ giữ các dòng mới nhất (CSV trong phiên hiện tại vẫn đủ).
+          sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+            ...snapshot, streamedVariants: streamedVariants.slice(0, TABLE_ROW_LIMIT),
+          }))
+        } catch {
+          // bộ nhớ bị chặn: bỏ qua, trang vẫn chạy bình thường
+        }
+      }
+    }
+    if (!isStreaming) {
+      save()
+      return
+    }
+    const timer = window.setTimeout(save, 1500)
+    return () => window.clearTimeout(timer)
+  }, [progress, stats, streamedVariants, dangerQueue, ablation, runMask, isStreaming])
+
+  // Đồng hồ thời gian đã chạy
+  useEffect(() => {
+    if (!isStreaming) return
+    const timer = window.setInterval(() => setNow(currentTimeMs()), 1000)
+    return () => window.clearInterval(timer)
+  }, [isStreaming])
+
+  // Chặn rời trang khi đang chạy: điều hướng trong web (menu, nút Back, mở chi tiết) và đóng tab / tải lại.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) => isStreaming && currentLocation.pathname !== nextLocation.pathname
+  )
+  useEffect(() => {
+    if (blocker.state !== "blocked") return
+    // Đồng ý rời trang -> trang Batch unmount, cleanup bên dưới huỷ stream.
+    if (window.confirm(LEAVE_WARNING)) {
+      blocker.proceed()
+    } else {
+      blocker.reset()
+    }
+  }, [blocker])
+
+  useEffect(() => {
+    if (!isStreaming) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", handler)
+    return () => window.removeEventListener("beforeunload", handler)
+  }, [isStreaming])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -112,6 +178,7 @@ export const Batch: React.FC = () => {
     }
     setSelectedFile(file)
     setStreamError(null)
+    setStatusText(null)
     setStreamedVariants([])
     setDangerQueue([])
     setProgress(0)
@@ -148,6 +215,12 @@ export const Batch: React.FC = () => {
     setProgress(0)
     setStats({ totalProcessed: 0, missenseAccepted: 0, nonMissenseRejected: 0 })
     setStreamError(null)
+    setStatusText("Uploading and parsing the variant list...")
+    setTotalVariants(null)
+    setNewestId(null)
+    const startTime = currentTimeMs()
+    setStartedAt(startTime)
+    setNow(startTime)
     setIsStreaming(true)
     setRunMask(ablationStateToMask(ablation))
 
@@ -166,18 +239,21 @@ export const Batch: React.FC = () => {
       streamServiceRef.current = null
     }
     setIsStreaming(false)
+    setStatusText("Stopped by user.")
   }
 
   const handleStreamEvent = (event: BatchStreamEvent) => {
     setProgress(event.progress_percent)
 
-    if (event.type === "variant_stream" && event.variant) {
-      const newVariant = { ...event.variant, isNewStreamItem: true }
-      
-      setStreamedVariants((prev) => {
-        const updatedPrev = prev.map(v => ({ ...v, isNewStreamItem: false }))
-        return [newVariant, ...updatedPrev].slice(0, 500)
-      })
+    if (event.type === "stream_status") {
+      if (event.status) setStatusText(event.status)
+      if (event.total_variants) setTotalVariants(event.total_variants)
+
+    } else if (event.type === "variant_stream" && event.variant) {
+      const newVariant = event.variant
+      // Giữ đủ mọi kết quả (cho CSV); bảng chỉ vẽ TABLE_ROW_LIMIT dòng mới nhất.
+      setStreamedVariants((prev) => [newVariant, ...prev])
+      setNewestId(newVariant.id)
 
       if (newVariant.classification === "Pathogenic") {
         setDangerQueue((prev) => {
@@ -201,11 +277,13 @@ export const Batch: React.FC = () => {
 
     } else if (event.type === "stream_error") {
       setIsStreaming(false)
+      setStatusText(null)
       setStreamError(event.reason || "Batch stream encountered an error.")
 
     } else if (event.type === "stream_completed") {
       setIsStreaming(false)
       setProgress(100)
+      setStatusText(null)
     }
   }
 
@@ -225,15 +303,15 @@ export const Batch: React.FC = () => {
       v.sota_alphamissense ?? "N/A"
     ])
 
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n")
-    const encodedUri = encodeURI(csvContent)
-    
+    const csv = [headers.join(","), ...rows.map(e => e.join(","))].join("\n")
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
     const link = document.createElement("a")
-    link.setAttribute("href", encodedUri)
+    link.setAttribute("href", url)
     link.setAttribute("download", `TriMVPP_Batch_Results_${new Date().getTime()}.csv`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -352,6 +430,28 @@ export const Batch: React.FC = () => {
                 <span className="text-xl font-bold font-mono text-indigo-700">{progress}%</span>
               </div>
               <Progress value={progress} className="h-3 bg-slate-100" />
+              {(isStreaming || statusText) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-indigo-50/60 border border-indigo-100 px-3 py-2 text-xs">
+                  <span className="flex items-center gap-2 text-indigo-800 font-medium">
+                    {isStreaming && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    {statusText ?? "Working..."}
+                  </span>
+                  {isStreaming && startedAt !== null && (
+                    <span className="flex items-center gap-1.5 font-mono text-slate-600">
+                      <Timer className="h-3.5 w-3.5" />
+                      {formatDuration(now - startedAt)} elapsed
+                      {totalVariants && stats.totalProcessed > 0 && stats.totalProcessed < totalVariants && (
+                        <> · ~{formatDuration(((now - startedAt) / stats.totalProcessed) * (totalVariants - stats.totalProcessed))} left</>
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
+              {isStreaming && (
+                <p className="text-[11px] text-slate-500">
+                  Keep this page open until screening finishes; leaving it stops the run.
+                </p>
+              )}
               
               <div className="grid grid-cols-3 gap-4 pt-2">
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/60">
@@ -398,7 +498,9 @@ export const Batch: React.FC = () => {
               <span className="flex items-center gap-2">
                 <Database className="h-4 w-4 text-slate-500" />
                 Accepted Missense Variants
-                <span className="text-xs font-normal text-slate-500">(click a row for full detail)</span>
+                <span className="text-xs font-normal text-slate-500">
+                  (click a row for full detail{streamedVariants.length > TABLE_ROW_LIMIT ? `; showing latest ${TABLE_ROW_LIMIT}, CSV has all` : ""})
+                </span>
               </span>
               <div className="flex gap-2 items-center">
                 <Badge variant="secondary" className="font-mono text-xs">
@@ -434,7 +536,7 @@ export const Batch: React.FC = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {streamedVariants.map((v, i) => (
+                  {streamedVariants.slice(0, TABLE_ROW_LIMIT).map((v, i) => (
                     <TableRow
                       key={`${v.variant_id}-${i}`}
                       role="button"
@@ -448,7 +550,7 @@ export const Batch: React.FC = () => {
                         }
                       }}
                       className={`group cursor-pointer transition-colors duration-500 hover:bg-indigo-50 focus:outline-none focus-visible:bg-indigo-50 ${
-                        v.isNewStreamItem ? "bg-indigo-50/50" : ""
+                        v.id === newestId ? "bg-indigo-50/50" : ""
                       }`}
                     >
                       <TableCell className="font-mono text-xs text-slate-500">#{v.id}</TableCell>

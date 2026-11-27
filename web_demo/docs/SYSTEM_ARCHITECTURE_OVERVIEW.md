@@ -1,6 +1,6 @@
 # TriMVPP Variant Pathogenicity Classification System — System Architecture Overview
 
-> Tài liệu đặc tả kỹ thuật trích từ mã nguồn tại `F:/Demo` (cập nhật ngày 26/11/2026, sau khi tích hợp 7 checkpoint TriMVPP và chuyển phần giải thích sang Integrated Gradients + attention map).
+> Tài liệu đặc tả kỹ thuật trích từ mã nguồn tại `F:/Demo` (cập nhật ngày 27/11/2026: 7 checkpoint TriMVPP; giải thích bằng Integrated Gradients + attention map, IG chỉ tính khi mở trang XAI; Single đi theo thứ tự VEP → gatekeeper → trích xuất; Batch chia khối 64, chạy gối đầu, bấm Stop là dừng hẳn).
 > Mục đích: nguồn dữ liệu cho **Chapter 5 — System Design and Implementation** (`docs/chapter5_trimvpp.tex`) và phần minh hoạ giao diện.
 > Tên hàm/biến/hằng số được dẫn kèm đường dẫn tệp để tiện đối chiếu. Các điểm cần lưu ý khi viết luận văn được gom ở [Mục 7](#7-ghi-chú-đối-chiếu--các-điểm-cần-lưu-ý-khi-viết-luận-văn).
 
@@ -51,7 +51,7 @@
 | Nhóm | Package | Phiên bản | Ghi chú |
 |---|---|---|---|
 | UI runtime | `react`, `react-dom` | 19.3.1 | `StrictMode` trong `main.tsx` |
-| Routing | `react-router-dom` | 7.18.5 | `BrowserRouter` |
+| Routing | `react-router-dom` | 7.18.5 | `createBrowserRouter` + `RouterProvider` (data router, cần cho `useBlocker`) |
 | Charts | `recharts` | 3.10.1 | Biểu đồ IG theo đặc trưng (trang XAI); heatmap/dải token vẽ bằng SVG tự viết |
 | Icons | `lucide-react` | 1.70.0 | |
 | Styling | `tailwindcss` | 3.4.19 | + `postcss`, `autoprefixer` |
@@ -120,7 +120,7 @@ F:/Demo/
 │   │   ├── models/variant.py        # ORM: Variant, Prediction, InferenceFeature
 │   │   ├── schemas/                 # common.py (IG/attention), single.py (+ XaiResponse), batch.py
 │   │   ├── services/
-│   │   │   ├── inference_service.py # điều phối: cache → VEP → gatekeeper → đặc trưng → TriMVPP + IG → upsert; run_xai
+│   │   │   ├── inference_service.py # điều phối: cache → VEP → gatekeeper → đặc trưng → TriMVPP → upsert; run_xai
 │   │   │   ├── vep_runner.py        # docker exec rbnet_vep vep …, parse TSV, Missense Gatekeeper
 │   │   │   ├── sequence_service.py  # cửa sổ DNA 1001 bp / Protein 501 aa, kiểm tra REF
 │   │   │   ├── feature_pipeline.py  # FoundationModelHub, SpliceAI, geometry, chuẩn hoá, preload, EXTRACTOR_TAG
@@ -200,7 +200,7 @@ variants (1) ──  inference_features (0..1)  FK/PK inference_features.variant
 | `classification` | `VARCHAR(16)` | `NOT NULL` | `Pathogenic` nếu `p ≥ τ` của checkpoint, ngược lại `Benign` |
 | `sota_alphamissense` | `FLOAT` | nullable | max(AlphaMissense_score) từ dbNSFP |
 | `sota_revel` | `FLOAT` | nullable | max(REVEL_score) từ dbNSFP |
-| `ig_values` | `JSONB` | `NOT NULL` | Kết quả Integrated Gradients (Mục 4.12): `{method, mode, baseline, steps, logit, baseline_logit, completeness_residual, relative_residual, residual_over_5pct, modalities[], tokens[], features[]}` |
+| `ig_values` | `JSONB` | nullable | **NULL cho tới khi trang XAI của dự đoán được mở lần đầu**; sau đó lưu kết quả Integrated Gradients (Mục 4.12): `{method, mode, baseline, steps, logit, baseline_logit, completeness_residual, relative_residual, residual_over_5pct, modalities[], tokens[], features[]}` |
 | `model_tag` | `VARCHAR(128)` | nullable | Khoá phiên bản cache: `"{file}.pth@{mtime}\|{EXTRACTOR_TAG}"` |
 
 **Index:** `ix_variant_mask` — **UNIQUE** trên `(variant_id, ablation_mask)`. Attention map **không** được lưu (tính khi mở trang XAI).
@@ -243,7 +243,7 @@ CREATE TABLE predictions (
     classification     VARCHAR(16)  NOT NULL,
     sota_alphamissense FLOAT,
     sota_revel         FLOAT,
-    ig_values          JSONB        NOT NULL,
+    ig_values          JSONB,
     model_tag          VARCHAR(128)
 );
 CREATE UNIQUE INDEX ix_variant_mask ON predictions (variant_id, ablation_mask);
@@ -264,7 +264,7 @@ CREATE TABLE inference_features (
 );
 ```
 
-**Migration trong `init_db.py`:** (1) nếu `inference_features` thiếu cột `tok_dna` (schema trước TriMVPP) → xoá `predictions` + `inference_features`; (2) nếu `predictions` còn cột `shap_values` → xoá `predictions` để tạo lại với `ig_values` (đặc trưng được giữ); (3) `ADD COLUMN IF NOT EXISTS model_tag`; (4) `DROP TABLE IF EXISTS extracted_features`.
+**Migration trong `init_db.py`:** (1) nếu `inference_features` thiếu cột `tok_dna` (schema trước TriMVPP) → xoá `predictions` + `inference_features`; (2) nếu `predictions` còn cột `shap_values` → xoá `predictions` để tạo lại với `ig_values` (đặc trưng được giữ); (3) `ADD COLUMN IF NOT EXISTS model_tag`; (4) `DROP TABLE IF EXISTS extracted_features`; (5) `ALTER COLUMN ig_values DROP NOT NULL` (IG tính khi mở XAI).
 
 ### 2.6 Cơ chế Upsert chống trùng lặp
 
@@ -274,7 +274,7 @@ CREATE TABLE inference_features (
 |---|---|---|
 | `variants` | `variant_id` | Sau khi trích xuất đặc trưng (`_store_features`) |
 | `inference_features` | `variant_id` | Cùng giao dịch với `variants`; **commit ngay** để nếu bước sau lỗi thì không phải chạy lại VEP + FM |
-| `predictions` | `(variant_id, ablation_mask)` | Sau khi tính xác suất + IG |
+| `predictions` | `(variant_id, ablation_mask)` | Sau khi tính xác suất (`ig_values = NULL`); `/xai` cập nhật `ig_values` lần đầu được mở |
 
 Chạy lại (Live Bypass), dữ liệu khác `model_tag`, hay hai request đồng thời đều **ghi đè đúng một dòng**.
 
@@ -291,10 +291,10 @@ Chạy lại (Live Bypass), dữ liệu khác `model_tag`, hay hai request đồ
 |---|---|---|---|---|
 | 1 | GET | `/` | JSON | Thông tin dịch vụ |
 | 2 | GET | `/api/v1/health` | JSON | DB, thiết bị, 7 checkpoint (kèm τ và MCC test), artifact |
-| 3 | POST | `/api/v1/predict/single` | `SingleVariantResponse` | Dự đoán + IG cho một biến thể |
+| 3 | POST | `/api/v1/predict/single` | `SingleVariantResponse` | Dự đoán cho một biến thể (`ig_analysis` thường là `null`) |
 | 4 | GET | `/api/v1/predict/batch-stream` | `text/event-stream` | Sàng lọc cohort demo 10 biến thể |
 | 5 | POST | `/api/v1/predict/batch-upload` | `text/event-stream` | Sàng lọc file upload |
-| 6 | GET | `/api/v1/xai/{variant_id}?ablation_mask=` | `XaiResponse` | Dự đoán + IG (từ cache) + attention map |
+| 6 | GET | `/api/v1/xai/{variant_id}?ablation_mask=` | `XaiResponse` | Dự đoán (cache) + IG (tính lần đầu rồi lưu) + attention map |
 
 ### 3.2 `GET /api/v1/health`
 
@@ -346,17 +346,18 @@ Frontend dùng `checkpoints[].test_mcc` để hiển thị dòng *Test-set MCC o
     "checkpoint": "trimvpp_111.pth", "architecture": "TriMVPP",
     "decision_threshold": 0.4791317582130432, "test_mcc": 0.8424,
     "warnings": ["spliceai_not_found: ...", "alphamissense_unavailable: ..."],
-    "timings_ms": { "vep": 0, "spliceai": 0, "fm_dna": 0, "fm_prot": 0, "geom": 0, "norm": 0, "ig": 0, "db": 0 }
+    "timings_ms": { "vep": 0, "spliceai": 0, "fm_dna": 0, "fm_prot": 0, "geom": 0, "norm": 0, "db": 0 }
   }
 }
 ```
 
+- `ig_analysis` là **`null`** cho tới khi trang XAI của dự đoán được mở (IG không còn tính trong `/predict/single` hay Batch); khi đã có thì trả kèm từ cache.
 - `tokens`: 66 dòng cho mỗi nhánh chuỗi đang bật (2 allele × 33 vị trí). `features`: 28 dòng khi bật Bio + Geom, sắp theo |IG| giảm dần.
 - `sota.*` = `null` khi dbNSFP không có điểm (frontend hiển thị "N/A").
 
 ### 3.4 `GET /api/v1/xai/{variant_id}?ablation_mask={0..15}`
 
-- Nội bộ (`run_xai`): `run_single_variant_inference(use_cache=True)` (dự đoán + IG, thường trúng cache) → đọc `inference_features` → `ml_engine.attention()`.
+- Nội bộ (`run_xai`): `run_single_variant_inference(use_cache=True)` (dự đoán, thường trúng cache) → đọc `inference_features` → nếu `ig_values` còn NULL thì `ml_engine.explain()` tính IG và **UPDATE** dòng `predictions` → `ml_engine.attention()`. `meta.timings_ms` có `ig` (chỉ lần đầu) và `attn`.
 - Response `XaiResponse` = `SingleVariantResponse` + trường `attention`:
 
 ```json
@@ -410,7 +411,7 @@ Alias cột: `chrom ∈ {chrom, #chrom, chr, chromosome, contig, seqname}`, `pos
 #### 3.5.3 Giao thức SSE
 
 - Mỗi sự kiện: một dòng `data: <JSON BatchStreamEvent>`. Lỗi tổ hợp/checkpoint được kiểm tra **trước** khi mở stream (trả HTTP 400/409 thường).
-- `BatchStreamEvent`: `type` (`variant_stream | variant_skipped | stream_completed | stream_error`), `progress_percent`, `variant` (`BatchVariant`), `variant_id`, `detected_consequence`, `reason`, `error_code`, `summary {total_processed, missense_accepted, non_missense_rejected}`.
+- `BatchStreamEvent`: `type` (`stream_status | variant_stream | variant_skipped | stream_completed | stream_error`), `progress_percent`, `variant` (`BatchVariant`), `variant_id`, `detected_consequence`, `reason`, `error_code`, `summary {total_processed, missense_accepted, non_missense_rejected}`; riêng `stream_status`: `stage` (`annotating` = VEP + SpliceAI, `classifying` = FM + dự đoán), `status` (vd "Chunk 3/94: annotating 64 variants with VEP + SpliceAI"), `chunk`, `total_chunks`, `total_variants`.
 - `BatchVariant`: `id`, `variant_id`, `gene`, `consequence`, `trimvpp_probability`, `classification`, `clinvar_ground_truth`, `sota_alphamissense`, `danger_rank` (= thứ tự đến).
 
 | Tình huống | Sự kiện | Stream |
@@ -420,6 +421,7 @@ Alias cột: `chrom ∈ {chrom, #chrom, chr, chromosome, contig, seqname}`, `pos
 | Lỗi hạ tầng (VEP/scaler/FM…) | `stream_error` | dừng |
 | Mất kết nối PostgreSQL | `stream_error`, `DATABASE_UNAVAILABLE` | dừng |
 | Chạy xong | `stream_completed` + `summary` | kết thúc |
+| Người dùng bấm Stop / rời trang / đóng tab (client ngắt kết nối) | — | **huỷ toàn bộ**: `cancel_event` được set, tiến trình VEP đang chạy bị kill cả trong container (`pkill -f <job>`), SpliceAI và các khối còn lại không chạy; log `batch stopped early …` |
 
 Client: `batch-stream` dùng `EventSource`; `batch-upload` dùng `fetch` + `ReadableStream` (`parseSseLines` trong `services/api.ts`).
 
@@ -469,13 +471,14 @@ POST /predict/single
   │         ├─ có  ─────────────────────────────► CACHE HIT → trả response (is_cache_hit=true)
   │         └─ không → nạp cửa sổ token + raw_features ─► FEATURE REUSE (đổi tổ hợp / Live Bypass)
   └─ không → CACHE MISS: _extract_and_store
-              ├─ Thread VEP (docker exec)  ║ song song ║  NT-v1 (cửa sổ DNA) + SpliceAI lookup
-              ├─ Missense Gatekeeper (422 nếu không phải missense)
-              ├─ Cửa sổ Protein 501 aa → ESM-1b
+              ├─ VEP (docker exec)
+              ├─ Missense Gatekeeper (422 nếu không phải missense; dừng tại đây, không dùng GPU/SpliceAI)
+              ├─ Cửa sổ DNA 1001 bp + Protein 501 aa (kiểm tra REF) → NT-v1 + ESM-1b
+              ├─ SpliceAI lookup
               ├─ Geometry V2 từ token tâm (LVD + LID qua FAISS k=64)
               └─ UPSERT variants + inference_features → COMMIT
   ▼
-ml_engine.predict: chuẩn hoá .pkl → TriMVPP (FP32) → Integrated Gradients (logit) → sigmoid → so với τ
+ml_engine.predict: chuẩn hoá .pkl → TriMVPP (FP32) → sigmoid → so với τ   (IG: chỉ khi mở /xai)
   ▼
 UPSERT predictions (variant_id, ablation_mask) → COMMIT → response
 ```
@@ -541,7 +544,7 @@ Chuỗi ALT = chuỗi REF thay ký tự ở tâm.
 - Từ hidden state lớp cuối, lấy **33 token** quanh token đột biến (±16) cho REF và ALT → `TokenWindow.hidden (2, 33, 1280)` float16 và `mask (2, 33)` (vị trí ngoài chuỗi = `False`). Đây là đầu vào chuỗi của TriMVPP.
 - Token tâm (`hidden[:, 16]`) là embedding REF/ALT dùng cho geometry và lưu vào cột `vector(1280)`.
 - FM nạp ở FP16 (`FM_CUDA_DTYPE=fp16`), không autocast. Batch: tối đa `FM_BATCH_VARIANTS = 8` biến thể/forward; khi CUDA OOM thì chia đôi lô đệ quy.
-- **Chồng lấp ở luồng Single:** VEP chạy trong `ThreadPoolExecutor(max_workers=4)` song song với NT-v1 + SpliceAI; ESM-1b chờ VEP trả ENSP + vị trí protein.
+- **Thứ tự cố định (gatekeeper trước):** VEP → Missense Gatekeeper → cửa sổ DNA/Protein → NT-v1 + ESM-1b → SpliceAI. Biến thể bị loại chỉ tốn thời gian VEP (log chỉ có chặng `vep`), không dùng GPU hay SpliceAI. Đo ngày 27/11/2026 (10 biến thể mới): trung vị 3,41 s; VEP 2 805 ms, NT-v1 178 ms, ESM-1b 185 ms, SpliceAI 125 ms; biến thể không phải missense bị trả 422 sau ~2,7–3,3 s.
 
 ### 4.9 Bước 7 — Geometry V2: LVD + LID (`ml_core/geometry_v2.py`)
 
@@ -598,8 +601,7 @@ Giữ nguyên phương pháp notebook 19 của nhóm (`cross_attention_explainab
 - **Tích phân:** Riemann-trapezoid 64 bước, tính theo nhóm 8 điểm nội suy (`IG_INTERNAL_BATCH`), FP32. Nếu `|residual| / |logit − logit_baseline| > 5%` → chạy lại 128 bước; vẫn vượt thì `residual_over_5pct = true` (UI cảnh báo).
 - **Completeness:** Σ IG + residual = logit − logit_baseline (kiểm chứng: lệch < 10⁻⁶).
 - **Gộp kết quả:** theo nhánh (`modalities`: tổng có dấu + tổng |IG|), theo token (`tokens`: tổng trên 1280 chiều cho mỗi allele × vị trí), theo đặc trưng (`features`: kèm tên hiển thị, mô tả, giá trị thô, giá trị đã chuẩn hoá).
-- Xác suất trả về = sigmoid(logit) của chính lần forward FP32 trong IG.
-- IG được tính **trong mỗi lần dự đoán** (Single và Batch) và lưu vào `predictions.ig_values`.
+- IG **không** tính khi dự đoán (Single, Batch). Lần đầu mở `/xai` của một dự đoán, `ml_engine.explain()` tính IG (~0,3 s với 111) rồi lưu vào `predictions.ig_values`; các lần sau đọc lại. Xác suất của dự đoán = sigmoid(logit) của forward FP32 thường (`ml_engine.predict`).
 
 **Attention map** (`ml_engine.attention`, `xai.attention_maps`): tính khi gọi `/xai`, từ đặc trưng đã lưu; trả 3 lớp × 8 head cho mọi nhánh query; nhãn token theo dạng `DNA:-16 … DNA:+16`, `Protein:+0`, tên đặc trưng. Không lưu DB.
 
@@ -612,17 +614,22 @@ Trạng thái ghi ở trường `cache=` của log `inference variant=… mask=�
 | Trạng thái | Điều kiện | Công việc | Ghi DB |
 |---|---|---|---|
 | **`hit`** | `use_cache` ∧ có đặc trưng hợp lệ ∧ có prediction khớp `(variant_id, mask, model_tag)` | Chỉ đọc DB | không |
-| **`features`** | Có đặc trưng nhưng chưa có prediction cho mask/model hiện tại, **hoặc** `use_cache=false` | Đọc cửa sổ token + `raw_features` → chuẩn hoá → TriMVPP + IG. Không chạy lại VEP/SpliceAI/FM | upsert `predictions` |
+| **`features`** | Có đặc trưng nhưng chưa có prediction cho mask/model hiện tại, **hoặc** `use_cache=false` | Đọc cửa sổ token + `raw_features` → chuẩn hoá → TriMVPP. Không chạy lại VEP/SpliceAI/FM | upsert `predictions` |
 | **`miss`** | Chưa có đặc trưng (hoặc `extractor_tag` cũ) | Toàn bộ pipeline | upsert `variants` + `inference_features` (commit), rồi `predictions` |
 
 **Vô hiệu hoá cache tự động:** `EXTRACTOR_TAG` đổi khi đổi FM, cửa sổ, ký tự đệm, thiết bị, dtype hoặc phiên bản cửa sổ token/geometry; `model_tag` đổi khi file `.pth` đổi mtime; `_refresh_stale_geometry` tính lại LID từ embedding đã lưu nếu `LID = null` hoặc `lid_k` khác cấu hình, rồi xoá predictions cũ của biến thể.
 
-### 4.14 Luồng Batch (SSE)
+### 4.14 Luồng Batch (SSE): chia khối, chạy gối đầu, huỷ được
 
-1. `prefetch_annotations`: lọc biến thể chưa có đặc trưng → **VEP một lần cho cả file** (`--fork 4` nếu > 50) → SpliceAI cho các SNV missense.
-2. Theo khối 8 biến thể: `prepare_features_batch` dựng cửa sổ, chạy NT-v1 rồi ESM-1b (một forward/khối), tính geometry, upsert + commit một lần. Lỗi riêng biến thể trả về dạng `failures`.
-3. Từng biến thể: `run_single_variant_inference(use_cache=True, prefetched)` (dự đoán + IG) → phát sự kiện SSE ngay khi xong.
-4. Mọi lời gọi nặng chạy trong `asyncio.to_thread`.
+1. File được chia thành các **khối `BATCH_CHUNK_VARIANTS = 64`** biến thể (`predict.py`, `_create_batch_sse_response`).
+2. Mỗi khối: `prefetch_annotations` (session DB riêng, chạy trong thread) lọc biến thể chưa có đặc trưng → **VEP một lần cho khối** (`--fork 4` vì > 50) → Missense Gatekeeper → SpliceAI cho các SNV missense.
+3. **Chạy gối đầu:** ngay khi nhận chú thích của khối *i*, backend khởi động VEP + SpliceAI của khối *i + 1* (CPU/Docker) trong lúc GPU xử lý khối *i*. Tổng thời gian ≈ thời gian VEP.
+4. Trong khối, theo micro-batch `FM_BATCH_VARIANTS = 8`: `prepare_features_batch` dựng cửa sổ, chạy NT-v1 rồi ESM-1b, tính geometry, upsert + commit; rồi từng biến thể `run_single_variant_inference(use_cache=True, prefetched)` (chỉ dự đoán, không IG) → phát `variant_stream` ngay.
+5. Trước mỗi giai đoạn của khối, phát `stream_status` (annotating / classifying) để giao diện hiển thị tiến độ.
+6. **Huỷ:** khi stream kết thúc vì bất kỳ lý do gì (xong, lỗi, client ngắt kết nối), khối `finally` set `cancel_event`. `annotate_variants` chạy VEP bằng `Popen` và kiểm tra `cancel_event` mỗi 0,5 s; khi bị huỷ thì kill `docker exec` **và** tiến trình VEP trong container (`pkill -f <job>`), xoá file tạm, ném `BatchCancelledError`; SpliceAI và các khối sau không chạy. Phần GPU đang dở (≤ 8 biến thể, ~1–2 s) chạy nốt rồi dừng.
+7. Mọi lời gọi nặng chạy trong `asyncio.to_thread`.
+
+**Đo (27/11/2026):** file 150 biến thể mới → kết quả đầu tiên sau **28,7 s**, tổng 72 s (0,48 s/biến thể); bấm Stop giữa chừng → sau 2 s không còn tiến trình VEP/file tạm, backend 0 s CPU, DB không tăng.
 
 ---
 
@@ -677,11 +684,12 @@ Mọi đọc/ghi `sessionStorage` được bọc `try/catch`. Chống race condi
 ### 5.5 Trang Batch Screening (`/batch`)
 
 - Kéo-thả/chọn file (`.vcf, .csv, .txt, .parquet, .xlsx`); không chọn file → cohort demo.
-- **Start Screening / Stop Process**; panel ablation khoá khi đang stream; `runMask` lưu tổ hợp của lần chạy.
-- Thanh tiến độ + 3 thống kê (Processed, Missense Valid, Gatekeeper Rejected).
-- Bảng Accepted Missense Variants (tối đa 500 dòng): bấm một dòng → `/single?variant=…&mask=<runMask>&from=batch`.
+- **Start Screening / Stop Process** (Stop huỷ cả việc phía server, Mục 4.14); panel ablation khoá khi đang stream; `runMask` lưu tổ hợp của lần chạy.
+- Thanh tiến độ + **dòng trạng thái theo khối** (từ `stream_status`) + thời gian đã chạy và ước tính thời gian còn lại + 3 thống kê (Processed, Missense Valid, Gatekeeper Rejected).
+- **Chặn rời trang khi đang chạy:** `useBlocker` (menu, nút Back, mở chi tiết) hiện hộp xác nhận; `beforeunload` cảnh báo khi đóng tab/tải lại.
+- Bảng Accepted Missense Variants vẽ **500 dòng mới nhất**, nhưng giữ đủ mọi kết quả; bấm một dòng → `/single?variant=…&mask=<runMask>&from=batch`. Trạng thái lưu `sessionStorage` được gộp ghi (1,5 s/lần khi đang chạy).
 - **Top Pathogenic Triage:** tối đa 5 biến thể Pathogenic có xác suất cao nhất; nút **View Explainability** → `/xai?…&from=batch`.
-- **Export CSV** → `TriMVPP_Batch_Results_<timestamp>.csv`.
+- **Export CSV** (đủ toàn bộ kết quả, tạo bằng `Blob`) → `TriMVPP_Batch_Results_<timestamp>.csv`.
 
 ### 5.6 Trang XAI (`/xai`)
 
@@ -759,29 +767,30 @@ Repo không có `backend/.env.example`. Các khoá bắt buộc: `PROJECT_NAME`,
 | `IG_STEPS` / `IG_RETRY_STEPS` / `IG_RETRY_THRESHOLD` | `64` / `128` / `0.05` | Tích phân IG |
 | `IG_INTERNAL_BATCH` | `8` | Điểm nội suy mỗi forward/backward |
 | `SPLICEAI_WINDOW_SIZE` | `1024` | |
+| `BATCH_CHUNK_VARIANTS` | `64` | Số biến thể mỗi khối Batch (VEP + SpliceAI + FM theo khối) |
 
 ### 6.5 Launcher `start_system.bat` / `stop_system.bat`
 
 `start_system.bat`: kiểm tra `.venv` → **[1/3]** `docker compose up -d db` → **[2/3]** cửa sổ "TriMVPP Backend (FastAPI)": `uvicorn app.main:app --port 8000` (không `--reload`) → **[3/3]** cửa sổ "TriMVPP Frontend (React/Vite)": `npm run dev` → mở `http://localhost:5173`. Launcher **không** khởi động `rbnet_vep` (phải chạy sẵn, nếu không cache-miss trả 503 `VEP_UNAVAILABLE`). `stop_system.bat`: `docker compose stop db` và hướng dẫn đóng 2 cửa sổ.
 
-### 6.6 Số liệu hiệu năng (đo ngày 26/11/2026)
+### 6.6 Số liệu hiệu năng (đo ngày 27/11/2026, sau khi: IG tính khi mở XAI, gatekeeper trước, Batch theo khối)
 
-**Máy đo:** AMD Ryzen 7 8745H, 32 GB RAM, RTX 4060 Laptop 8 GB, Windows 11; FM ở FP16. Cohort demo 10 biến thể, một người dùng gửi tuần tự; mỗi kịch bản lặp 3 lần (cache hit: 10 lần) sau một lần khởi động, lấy **trung vị**. Thời gian đo ở backend (`meta.computation_time_ms`), trừ Batch và mở trang XAI đo ở client.
+**Máy đo:** AMD Ryzen 7 8745H, 32 GB RAM, RTX 4060 Laptop 8 GB, Windows 11; FM ở FP16. Cohort demo 10 biến thể, một người dùng gửi tuần tự; mỗi kịch bản lặp 3 lần (cache hit: 10 lần) sau một lần khởi động, lấy **trung vị**. Thời gian đo ở backend (`meta.computation_time_ms`), trừ Batch và trang XAI đo ở client. "XAI lần đầu" đo sau khi xoá `ig_values`.
 
 | Kịch bản | Đường thực thi | Độ trễ |
 |---|---|---|
-| Biến thể mới (Single) | cache miss | **3,54 s** |
-| Batch 10 biến thể mới | cache miss | **10,9 s** tổng (1,09 s/biến thể) |
-| Đổi tổ hợp / Live Bypass — 111 | feature reuse | **0,33 s** |
-| Feature reuse — 110 / 101 / 011 | | 0,24 / 0,25 / 0,25 s |
-| Feature reuse — 100 / 010 / 001 | | 0,06 / 0,06 / 0,07 s |
+| Biến thể mới (Single) | cache miss | **3,43 s** |
+| Batch 10 biến thể mới (cohort, 1 khối) | cache miss | **8,6 s** tổng (0,86 s/biến thể, nhanh hơn Single ×4,0) |
+| Batch 150 biến thể mới (3 khối, chạy gối đầu) | cache miss | kết quả đầu tiên **28,7 s**, tổng 72 s (0,48 s/biến thể) |
+| Đổi tổ hợp / Live Bypass — 111 | feature reuse | **66 ms** |
+| Feature reuse — 110 / 101 / 011 / 100 / 010 / 001 | | 37 / 67 / 74 / 30 / 31 / 57 ms |
 | Truy vấn lặp lại | cache hit | **18 ms** |
-| Mở trang XAI (đã có dự đoán) — 111 / 2 nhánh / 1 nhánh | cache + attention | 0,15 s / 0,08–0,10 s / 0,02–0,03 s |
-| Batch 10 biến thể chạy lại | cache hit ×10 | 0,19 s |
+| Mở XAI lần đầu (tính IG + attention) — 111 / 110 / 001 | | **0,48 s** (IG 0,29 s) / 0,30 s (IG 0,21 s) / 0,10 s (IG 0,02 s) |
+| Mở XAI lần sau (đọc IG, tính attention) — 111 / 110 / 001 | | 0,14 / 0,07 / 0,04 s |
 
-**Từng chặng khi cache miss (trung vị):** VEP 2 789 ms (~80%), ESM-1b 301 ms, IG 264 ms, SpliceAI 146 ms, DB 79 ms, NT-v1 28 ms (phần lớn chạy song song với VEP), chuẩn hoá 22 ms, geometry 7 ms.
+**Từng chặng khi cache miss (trung vị):** VEP 2 853 ms (~83%), NT-v1 190 ms, ESM-1b 181 ms, SpliceAI 120 ms, DB 66 ms, chuẩn hoá 27 ms, geometry 8 ms. Biến thể không phải missense bị trả 422 sau ~2,7–3,3 s (chỉ chặng VEP).
 
-**So với phiên bản dùng SHAP (permutation Shapley, 128 hoán vị):** biến thể mới 4,78 s → 3,54 s; Batch 10 biến thể 23,4 s → 10,9 s; feature reuse 111: 1,59 s → 0,33 s; cache hit không đổi (18 ms).
+**Lịch sử:** dùng SHAP (permutation, 128 hoán vị): 4,78 s / 23,4 s / 1,59 s / 18 ms. IG trong mỗi dự đoán (26/11): 3,54 s / 10,9 s / 0,33 s / 18 ms. Hiện tại (27/11): 3,43 s / 8,6 s / 66 ms / 18 ms (biến thể mới / Batch 10 / đổi tổ hợp 111 / cache hit).
 
 **Kiểm tra chức năng (bước D):** 10 biến thể × 7 tổ hợp: completeness đúng, residual tương đối lớn nhất 0,88%; attention có đúng ở 4 tổ hợp nhiều nhánh, mỗi hàng cộng bằng 1; xác suất Batch trùng tuyệt đối với Single; tắt hết nhánh → 400.
 
@@ -802,5 +811,7 @@ Repo không có `backend/.env.example`. Các khoá bắt buộc: `PROJECT_NAME`,
 9. **Badge "PostgreSQL Connected"** ở trang Single/Batch là nhãn tĩnh, không phản ánh `/health`.
 10. **Live Bypass** chỉ bỏ qua bảng `predictions`; không chạy lại VEP/FM nếu đặc trưng đã có.
 11. **Upload** đọc toàn bộ file vào bộ nhớ (`await file.read()`), không giới hạn kích thước phía server.
-12. **Component chưa dùng:** `variant/FeatureInspectorTabs.tsx` (cùng kiểu `BioFeatures`, `GeometryFeatures`) không được trang nào import.
-13. **Hình trong luận văn:** 5.1–5.3 (`.svg` → `.png` 2×), 5.4a–e (ảnh chụp giao diện 1440×1000, tỉ lệ 1,5×). `figures/5.4.svg/png` là sơ đồ DB cũ, Chương 5 không dùng.
+12. **IG được tính khi mở XAI:** lần mở đầu tiên của mỗi dự đoán chậm hơn (0,48 s với 111) vì tính IG; kết quả được lưu nên các lần sau 0,14 s. Dự đoán Single/Batch không còn chứa IG (`ig_analysis = null`).
+13. **Bấm Stop trong Batch dừng hẳn mọi việc phía server** (VEP trong container bị kill, khối sau không chạy); phần GPU đang dở ≤ 8 biến thể chạy nốt ~1–2 s.
+14. **Component chưa dùng:** `variant/FeatureInspectorTabs.tsx` (cùng kiểu `BioFeatures`, `GeometryFeatures`) không được trang nào import.
+15. **Hình trong luận văn:** 5.1–5.3 (`.svg` → `.png` 2×), 5.4a–e (ảnh chụp giao diện 1440×1000, tỉ lệ 1,5×). `figures/5.4.svg/png` là sơ đồ DB cũ, Chương 5 không dùng.
