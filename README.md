@@ -1,346 +1,127 @@
-# 🧬 Bioinformatics Sequence Research - AiTA Lab
+# TriMVPP: Missense Variant Pathogenicity Prediction
 
-Multi-task deep learning framework for biosequence analysis, pathogenicity prediction, and protein/nucleotide feature extraction.
+TriMVPP is a research model for predicting whether a human missense variant is **pathogenic** or **benign**. It combines three sources of information: DNA sequence, protein sequence, and tabular biological features. Cross-attention allows these sources to exchange information before the model produces a prediction score.
 
-**Research Focus:** Utilize pre-trained language models (Nucleotide Transformer, ESM-2) to build models for predicting biological properties of genetic variants.
+A missense variant changes an amino acid in a protein. Its consequences depend on factors ranging from sequence context, evolutionary conservation, and population frequency to potential effects on splicing. Many variants remain classified as variants of uncertain significance (VUS) because the available evidence is insufficient to interpret them.
 
----
+The project goes beyond building a multimodal predictor. It also examines the contribution of each data source, latent geometry, variant representation, and fusion mechanism; assesses the risk of data circularity; and investigates which evidence the trained model relies on.
 
-## 📋 Project Overview
+> **Intended use:** TriMVPP scores are computational evidence for research. They are not an ACMG/AMP variant classification and do not replace clinical assessment.
 
-This project focuses on 3 main tasks:
+## Problem Definition
 
-| Task | Description | Data | Model |
-|------|-------------|------|-------|
-| **Task 1: Splicing Prediction** | Predict splicing site type (donor/acceptor) | Sequence ~200bp | NT embeddings |
-| **Task 2: Protein Prediction** | Predict protein properties from sequence | Protein sequence | ESM-2 embeddings |
-| **Task 3: Variant Pathogenicity** | Classify variants (pathogenic/benign) | ClinVar + DNA/Protein seq | Multi-modal Fusion Model |
+- **Variant-level input:** chromosome, position, reference allele, and alternate allele on the GRCh38 reference assembly. The pipeline also requires the corresponding reference/alternate sequences, biological annotations, and geometry features.
+- **Output:** predicted probability of pathogenicity.
+- **Labels:** Pathogenic/Likely pathogenic is `1`; Benign/Likely benign is `0`. VUS and variants with conflicting interpretations are excluded from the labels used for this binary classification task.
 
----
+## The TriMVPP Model
 
-## 📁 Directory Structure
+| Source | Representation in the main configuration |
+|---|---|
+| DNA | [Nucleotide Transformer NTv1-500M](https://huggingface.co/InstaDeepAI/nucleotide-transformer-500m-human-ref), with a 1001-nucleotide sequence |
+| Protein | [ESM-1b 650M](https://huggingface.co/facebook/esm1b_t33_650M_UR50S), with a 501-amino-acid sequence |
+| Tabular features | 28 features: 11 core biological features, 9 SpliceAI features, and 8 geometry features |
 
-```
-Bio_sequence_Research_AITALAB/
-│
-├── data_processing/                          # 📊 Data preprocessing & preparation
-│   ├── dataset1_ClinVar_preprocess_variant_summary.ipynb
-│   ├── dataset2_map_csq_hgvsc_aDun.ipynb     # Map CSQ & HGVS-C
-│   ├── dataset2_map_ref_alt_sequence_dna.ipynb
-│   ├── dataset2_map_ref_alt_sequence_protein.ipynb
-│   ├── dataset3_sequence_gencode.ipynb       # Extract sequences from GENCODE
-│
-├── tools/                                     # 🛠️ Supporting tools
-│   ├── gnomAD_map_vep.ipynb                  # Map VEP annotations
-│   ├── test_parse_hgvsc_offset.ipynb         # Parse HGVS-C format
-│
-├── train/                                     # 🎯 Training pipelines
-│   │
-│   ├── task1_splicing_prediction/            # Splicing site prediction
-│   │   ├── data_preparation/
-│   │   │   ├── data_prepare.ipynb            # Data preparation
-│   │   │   ├── train_test_split.py
-│   │   │   ├── ratio_split.py
-│   │   │   └── extract_embed.py
-│   │   └── training/
-│   │       ├── main.ipynb                    # Training notebook
-│   │       ├── model.py                      # LSTM model
-│   │       ├── dataset.py                    # PyTorch Dataset
-│   │       ├── train_set.py
-│   │       ├── train_full.py
-│   │       ├── metrics.py
-│   │       ├── cm_visualize.py
-│   │       └── fileio.py
-│   │
-│   ├── task2_protein_prediction/             # Protein property prediction
-│   │
-│   └── task3_variant_prediction/             # ⭐ Variant pathogenicity prediction (MAIN)
-│       ├── config.py                         # Configuration
-│       ├── split_data.py                     # Split by chromosome
-│       ├── precompute_embeddings.py          # Extract NT + ESM-2 embeddings
-│       ├── dataset.py                        # PyTorch Dataset
-│       ├── model.py                          # Multi-modal Fusion model
-│       ├── train.py                          # Training with tracking
-│       ├── main.ipynb                        # Full pipeline
-│       ├── README.md                         # Task-specific guide
-│       ├── data/                             # Train/Val/Test splits
-│       ├── embeddings/                       # Precomputed embeddings
-│       ├── experiments/                      # Experiment configs & results
-│       └── runs/                             # TensorBoard logs
-│
-└── README.md                                  # This file
+Core biological features include allele frequencies and phyloP, phastCons, and GERP conservation scores. Geometry features comprise LID and three LVD measures (`LVD_L2`, `LVD_Cosine`, and `LVD_Relative`) for each of the DNA and protein branches. Geometry is a derived feature group within the tabular branch, **not a fourth modality**. The biological columns are listed in [dataset.py](core/module05v2_fusion_classifier/dataset.py); the selected geometry configuration is specified in the experiment notebooks.
+
+```text
+DNA ref/alt     -> NTv1-500M -> variant-centered token window --\
+Protein ref/alt -> ESM-1b    -> variant-centered token window ---+-> Cross-attention
+Bio + SpliceAI + geometry   -> feature tokens ------------------/         |
+                                                                    Pooling + MLP
+                                                                         |
+                                                               Pathogenicity probability
 ```
 
----
+In the main configuration, reference and alternate embeddings are concatenated by relative position; `k_radius=16` corresponds to a window of 33 token positions around the variant. The foundation model backbones are frozen during embedding extraction. The projection, cross-attention, pooling, and classifier components are trained for the task. For implementation details, see [cross_attention_3modal_experiment.py](core/module06_architecture_experiments/cross_attention_3modal_experiment.py) and the [methodology document](docs/scientific_methodology/01_CrossAttention_3modalities.docx).
 
-## 🚀 Quick Start
+## Evaluation and Results
 
-### Prerequisites
+The training, validation, and held-out test sets are split by chromosome to reduce leakage between them. Benchmark sets are prepared and checked for overlap separately; chromosome splitting alone does not establish that every source of data circularity has been eliminated. Models and thresholds are selected using validation data, while test results are reported separately.
 
-```bash
-# Python 3.9+
-# CUDA 11.8+ (recommended for GPU support)
+In the repository's comparison table, TriMVPP is evaluated against 20 existing tools. The MCC values below are the model's mean ± standard deviation across five seeds; rankings are based on MCC in the corresponding table:
 
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install transformers datasets numpy pandas scikit-learn matplotlib seaborn tensorboard jupyter
-pip install pyarrow biopython pysam  # Bioinformatics tools
+| Evaluation set | TriMVPP MCC | Rank |
+|---|---:|---:|
+| Held-out Test | 0.83722 ± 0.00424 | 1 |
+| ClinVar HQ | 0.88108 ± 0.01038 | 1 |
+| ProteinGym | 0.68140 ± 0.01276 | 3 |
+| UniProt | 0.53486 ± 0.01811 | 9 |
+
+See the [comparison table](docs/ours_vs_sota_performance_by_dataset.csv) and ablation tables in [docs](docs/). **Note:** the result files in `docs/` currently have a `.csv` extension but contain Excel workbooks (XLSX). Open or read them as XLSX rather than assuming they are CSV text. Results depend on the dataset, preparation, and experiment configuration used.
+
+## Repository Contents
+
+```text
+.
+├── controllers/                          Experiment notebooks and scripts
+├── core/
+│   ├── module01_data_processing_vep/     Preprocessing, VEP, splits, and sequence mapping
+│   ├── module02_fm_embedding_extraction/ Foundation model embedding extraction
+│   ├── module03_geometry_extraction/     Latent geometry extraction
+│   ├── module04_geo_bio_context_normalization/ Feature normalization and audits
+│   ├── module05_fusion_classifier/      Fusion/classifier pipeline and benchmarks
+│   ├── module05v2_fusion_classifier/    Version 2 fusion pipeline and experiments
+│   └── module06_architecture_experiments/ Architectures, ablations, and interpretability
+└── docs/                                 Result tables and methodology documents
 ```
 
-### Environment Configuration
+The modules contain different configurations and experiments; not every notebook uses the final TriMVPP architecture. The team also developed a web lookup system, but this repository does not contain its source code or deployment instructions at the repository root.
 
-Create a `.env` file or set environment variables:
+### Data Preparation
 
-```bash
-# Task 3 data path
-TASK3_PARQUET=<path_to>/variant_protein_sequence_101aa.parquet
+The notebooks in [module01_data_processing_vep](core/module01_data_processing_vep/) process ClinVar and dbSNP, map VEP annotations, create train/validation/test splits, prepare benchmarks, and generate reference/alternate sequences. Key starting points include:
 
-# Hugging Face token (if needed)
-HUGGING_FACE_HUB_TOKEN=<your_token>
-```
+| File | Purpose |
+|---|---|
+| [00_clinvar_raw_preprocess.ipynb](core/module01_data_processing_vep/00_clinvar_raw_preprocess.ipynb) | Preprocess ClinVar data, including GRCh38 selection |
+| [01_1_clinvar_vep_mapping.ipynb](core/module01_data_processing_vep/01_1_clinvar_vep_mapping.ipynb) | Map VEP annotations for ClinVar |
+| [01_2_clinvar_train_val_test_split.ipynb](core/module01_data_processing_vep/01_2_clinvar_train_val_test_split.ipynb) | Create and inspect chromosome-based data splits |
+| [02_3_dbsnp_clinvar_train_val_test_split.ipynb](core/module01_data_processing_vep/02_3_dbsnp_clinvar_train_val_test_split.ipynb) | Prepare combined dbSNP/ClinVar training sets and splits |
+| [04_01_test_data_process_overlapping.ipynb](core/module01_data_processing_vep/04_01_test_data_process_overlapping.ipynb) | Process benchmark data and check overlaps |
+| [05_map_ref_alt_sequence_dna.ipynb](core/module01_data_processing_vep/05_map_ref_alt_sequence_dna.ipynb), [05_map_ref_alt_sequence_protein.ipynb](core/module01_data_processing_vep/05_map_ref_alt_sequence_protein.ipynb) | Generate reference/alternate DNA and protein sequences |
 
----
+The `03_*` notebooks in the same directory prepare sets including ClinVar HQ, ProteinGym, UniProt, MaveDB, and VUS. See also the [Module 01 documentation](docs/scientific_methodology/Module01_Data_Processing_and_VEP_Documentation.docx).
 
-## 📊 Project Pipeline
-
-### 1️⃣ Data Processing (`data_processing/`)
-
-**Goal:** Prepare data from different sources (ClinVar, GENCODE, VEP) into standard format
+### Controller Notebooks
 
 | Notebook | Purpose |
-|----------|---------|
-| `dataset1_ClinVar_preprocess_variant_summary.ipynb` | Filter & preprocess ClinVar variants |
-| `dataset2_map_csq_hgvsc_aDun.ipynb` | Map CSQ → HGVS-C nomenclature |
-| `dataset2_map_ref_alt_sequence_dna.ipynb` | Extract DNA sequences (ref & alt) |
-| `dataset2_map_ref_alt_sequence_protein.ipynb` | Extract protein sequences |
-| `dataset3_sequence_gencode.ipynb` | Get sequences from GENCODE reference |
-
-**Output:** Parquet files with variant + sequences (DNA 601bp, Protein 101aa)
-
----
-
-### 2️⃣ Task 1: Splicing Prediction (`train/task1_splicing_prediction/`)
-
-**Goal:** Predict splicing site type from DNA sequence
-
-**Pipeline:**
-```
-Raw Data (.csv) → Train/Test Split → Val Split → Model Training → Metrics
-```
-
-**Run:**
-```bash
-cd train/task1_splicing_prediction/data_preparation/
-jupyter notebook data_prepare.ipynb
-
-cd ../training/
-jupyter notebook main.ipynb
-```
-
----
-
-### 3️⃣ Task 2: Protein Prediction (`train/task2_protein_prediction/`)
-
-**Goal:** Predict protein properties/functions (TODO/In Progress)
-
----
-
-### 4️⃣ Task 3: Variant Pathogenicity Prediction ⭐ (`train/task3_variant_prediction/`)
-
-**Goal:** Classify genetic variants as Pathogenic or Benign
-
-**Model Architecture:**
-```
-Input: DNA & Protein sequences from variants
-       ↓
-[DNA Seq] → Nucleotide Transformer (NT) → E_dna_ref, E_dna_alt
-[Prot Seq] → ESM-2 → E_prot_ref, E_prot_alt
-       ↓
-Fusion Layer: [E_ref, E_alt, E_alt - E_ref]
-       ↓
-Concat DNA + Protein embeddings
-       ↓
-MLP Classifier → Pathogenic (1) / Benign (0)
-```
-
-**Pipeline:**
-
-```bash
-cd train/task3_variant_prediction/
-
-# 1. Split data by chromosome (chr20/21 → test, rest → train/val)
-python split_data.py
-
-# 2. Precompute embeddings (NT + ESM-2)
-python precompute_embeddings.py
-
-# 3. Run training with experiment tracking
-python train.py
-
-# Or run full pipeline from notebook
-jupyter notebook main.ipynb
-```
-
-**Key Features:**
-- ✅ Multi-modal fusion (DNA + Protein)
-- ✅ Automatic experiment tracking (config, results, checkpoints)
-- ✅ TensorBoard logging
-- ✅ Best model selection
-- ✅ Train/Val/Test splits
-
-**View Results:**
-```bash
-# TensorBoard
-tensorboard --logdir=runs/
-
-# Results JSON
-cat experiments/experiment_*/results.json
-```
-
----
-
-## 🧠 Models & Pre-trained Embeddings
-
-| Model | Purpose | Source | Input Size |
-|-------|---------|--------|-----------|
-| **Nucleotide Transformer (NT)** | DNA embedding extraction | InstaDeepAI/nucleotide-transformer-500m-human-ref | 601bp |
-| **ESM-2** | Protein embedding extraction | facebook/esm2_t33_650M_UR50D | 101aa |
-| **Custom MLP Classifier** | Pathogenicity prediction | Fusion model | 1024 (512*2) |
-
----
-
-## 📈 Data Statistics
-
-### Task 3 (Variant Prediction)
-- **Source:** ClinVar variants + mapped sequences
-- **Splits:**
-  - **Train:** All variants except chr20/21
-  - **Val:** 15% of training (stratified)
-  - **Test:** chr20, chr21
-- **Labels:** Pathogenic (1), Benign (0)
-- **Sequence Length:** DNA 601bp, Protein 101aa
-
----
-
-## 🔧 Configuration
-
-**Main Config File:** [`train/task3_variant_prediction/config.py`](train/task3_variant_prediction/config.py)
-
-```python
-# Hyperparameters
-LR = 1e-3
-EPOCHS = 30
-BATCH_SIZE = 128
-DROPOUT = 0.2
-PATIENCE = 5
-
-# Embeddings
-PROJ_DIM = 512
-FUSION_HIDDEN = [512, 256]
-
-# Paths
-TEST_CHROMS = {"chr20", "chr21"}
-VAL_RATIO = 0.15
-SEED = 42
-```
-
----
-
-## 📊 Results & Monitoring
-
-### Experiment Tracking
-
-Each training run saves:
-- **args.json:** Command-line arguments
-- **config.json:** Configuration parameters
-- **config.py:** Copy of config file
-- **results.json:** Final metrics (accuracy, precision, recall, F1)
-- **tensorboard/:** TensorBoard events
-
-```
-experiments/
-├── experiment_1/
-│   ├── args.json
-│   ├── config.json
-│   ├── results.json
-│   └── tensorboard/
-└── experiment_N/
-    └── ...
-```
-
-### View Results
-
-```bash
-# List all experiments
-ls train/task3_variant_prediction/experiments/
-
-# View results
-cat train/task3_variant_prediction/experiments/experiment_4/results.json
-```
-
----
-
-## 💡 Usage Examples
-
-### Inference (New Variants)
-
-```python
-import torch
-from train.task3_variant_prediction.model import FusionClassifier
-from train.task3_variant_prediction.dataset import VariantDataset
-
-# Load trained model
-model = FusionClassifier(dna_emb_dim=1024, prot_emb_dim=1024)
-model.load_state_dict(torch.load('best_fusion_model.pt'))
-
-# Make predictions
-logits = model(dna_embedding, prot_embedding)
-predictions = torch.sigmoid(logits)
-```
-
-### Add New Dataset
-
-1. Add preprocessing script to `data_processing/`
-2. Output parquet format: `[variant_id, sequence_dna, sequence_protein, label, chrom]`
-3. Update `config.py` path
-4. Run training pipeline
-
----
-
-## 📚 References
-
-- **ClinVar:** https://www.ncbi.nlm.nih.gov/clinvar/
-- **Nucleotide Transformer:** https://github.com/instadeepai/nucleotide-transformer
-- **ESM-2:** https://github.com/facebookresearch/protein-folding
-- **VEP:** https://www.ensembl.org/info/docs/tools/vep/
-
----
-
-## 🤝 Contributing
-
-To add features or fix bugs:
-
-1. Create feature branch: `git checkout -b feature/your-feature`
-2. Commit changes: `git commit -m "Add your feature"`
-3. Push: `git push origin feature/your-feature`
-4. Create pull request
-
----
-
-## 📝 Notes
-
-- All embeddings are precomputed from pre-trained models (not fine-tuned)
-- Test set is fixed as chr20/21 for benchmarking
-- Experiment tracking is automatic - no manual logging needed
-- Stratified train/val split is used to balance classes
-
----
-
-## 📞 Contact & Support
-
-- **Lab:** AiTA Lab, FPTU
-- **Project:** Biosequence Research & Variant Prediction
-- **Date:** January 2026
-
----
-
-**Last Updated:** 2026-01-07
+|---|---|
+| [00_feature_extraction.ipynb](controllers/00_feature_extraction.ipynb) | Extract embeddings and geometry and normalize features |
+| [01_train_val_test_batch_runner.ipynb](controllers/01_train_val_test_batch_runner.ipynb) | Run configured training, validation, test, and benchmark pipelines |
+| [02_geometry_extraction_v2.ipynb](controllers/02_geometry_extraction_v2.ipynb) | Orchestrate version 2 geometry extraction |
+| [11_optimzed_architecture_run.ipynb](controllers/11_optimzed_architecture_run.ipynb) | Run architecture experiments using the notebook configuration |
+| [12_full_reproduction_and_ablations.ipynb](controllers/12_full_reproduction_and_ablations.ipynb) | Module 5 reproduction experiments, tool comparisons, and ablations |
+| [13_new_architecture_experiments.ipynb](controllers/13_new_architecture_experiments.ipynb) | Explore fusion, Transformer, and cross-attention architectures |
+| [14_fm_pairs_ablation.ipynb](controllers/14_fm_pairs_ablation.ipynb) | Step 1: compare foundation model pairs and tune the selected pair |
+| [15_sequence_length_ablation.ipynb](controllers/15_sequence_length_ablation.ipynb) | Step 2: compare DNA/protein sequence lengths and generate matched geometry |
+| [16_fm_pooling_ablation.ipynb](controllers/16_fm_pooling_ablation.ipynb) | Step 3: compare token windows and pooling strategies |
+| [17_fusion_classifier_benchmark.ipynb](controllers/17_fusion_classifier_benchmark.ipynb) | Compare fusion/classifier combinations; reuse Step 2 Cross-Attention checkpoints |
+| [18_feature_ablation_studies.ipynb](controllers/18_feature_ablation_studies.ipynb) | Pure ML and feature-group, individual-feature, and modality ablations |
+| [19_cross_attention_explainability.ipynb](controllers/19_cross_attention_explainability.ipynb) | Explain checkpoints using AF intervention, Integrated Gradients, occlusion, attention, and SHAP |
+| [20_training_dataset_ablation.ipynb](controllers/20_training_dataset_ablation.ipynb) | Compare the effect of training datasets |
+
+The Python scripts in [controllers](controllers/) support geometry/LID experiments, sequence-length studies, seed sweeps, MCC reporting, and a UniProt-augmented pipeline. Review each script's configuration before running it.
+
+## Environment and Execution
+
+The repository currently has no dependency manifest or version-pinned environment. Components use Python/Jupyter and, depending on the notebook, libraries such as PyTorch, Transformers, pandas, NumPy, scikit-learn, PyArrow, FAISS, Optuna, and XGBoost. Some notebooks also require tools or libraries for VEP, biological sequences, and model interpretability. Choose versions compatible with your operating system, GPU, and models; the repository does not provide a verified installation command for the entire pipeline.
+
+To prepare an experiment:
+
+1. Prepare source data, GRCh38/VEP resources, required annotations, reference/alternate sequences, and model weights. Notebooks refer to external Parquet files, caches, checkpoints, and resources; cloning the repository alone does not guarantee that these are available.
+2. Open the required notebook in Jupyter or VS Code. Adjust paths such as `BASE_DIR`, batch directories, caches, reference FASTA files, and checkpoints for your environment. Many current values are absolute paths on the team's machine.
+3. Check inputs and cell order. The main comparison steps have dependencies: Notebook 14 prepares Step 1 results; Notebook 15 uses the Step 1 configuration for Step 2; Notebooks 16 and 17 use Step 2 results/checkpoints. Notebook 18 uses the Notebook 17 baseline, and Notebook 19 requires trained checkpoints.
+4. Run only the required stages. Extraction and training cells can require substantial GPU time and storage. Some cells run Hugging Face in offline mode, so model weights must already be cached.
+5. Inspect the output and manifest for your own run to verify its data, seeds, configuration, and completion status. Outputs saved in notebooks may belong to earlier runs and do not necessarily reflect the current code.
+
+The pipeline uses caches, checkpoints, and result directories to resume some experiments. When changing data, seeds, or configuration, check the resume conditions and use a new batch or study when necessary to avoid mixing incompatible results.
+
+## References
+
+- [ClinVar](https://www.ncbi.nlm.nih.gov/clinvar/)
+- [Ensembl Variant Effect Predictor](https://www.ensembl.org/info/docs/tools/vep/)
+- [Nucleotide Transformer](https://github.com/instadeepai/nucleotide-transformer)
+- [ESM](https://github.com/facebookresearch/esm)
+- [ProteinGym](https://proteingym.org/)
+- [Project methodology documents](docs/scientific_methodology/)
