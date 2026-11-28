@@ -45,8 +45,8 @@ export const SEQUENTIAL_GRADIENT = `linear-gradient(to right, ${SEQUENTIAL.map((
 export const DIVERGING_GRADIENT = `linear-gradient(to right, ${IG_NEGATIVE}, rgb(${NEUTRAL.join(",")}), ${IG_POSITIVE})`
 
 export const MODALITY_LABEL: Record<IgModalityName, string> = {
-  DNA: "DNA tokens (NT-v1)",
-  Protein: "Protein tokens (ESM-1b)",
+  DNA: "DNA tokens (NTv1-500M)",
+  Protein: "Protein tokens (ESM-1b 650M)",
   Bio_SpliceAI: "Bio + SpliceAI (20)",
   Geometry: "Geometry (8)",
 }

@@ -491,7 +491,7 @@ export const Single: React.FC = () => {
                   <div>
                     <CardTitle className="text-xl font-extrabold text-blue-950">TriMVPP Architecture</CardTitle>
                     <CardDescription className="text-xs text-blue-800/70 mt-0.5">
-                      Cross-attention over DNA (NT-v1), protein (ESM-1b) and Bio + Geometry + SpliceAI features
+                      Cross-attention over DNA (NTv1-500M), protein (ESM-1b 650M) and tabular features
                     </CardDescription>
                   </div>
                 </div>

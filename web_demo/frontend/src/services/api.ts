@@ -37,7 +37,7 @@ async function requestJson<T>(url: string, init: RequestInit | undefined, fallba
 // ==========================================
 export async function predictSingleVariant(req: SingleVariantRequest): Promise<SingleVariantResponse> {
   if (computeAblationMask(req) === 0) {
-    throw new Error("At least one feature module (DNA, Protein, Biological, or Spatial Geometry) must be enabled.")
+    throw new Error("At least one feature module (DNA, Protein, or Bio + Geom + SpliceAI) must be enabled.")
   }
   if (USE_MOCK_API) return mockPredictSingleVariant(req)
 

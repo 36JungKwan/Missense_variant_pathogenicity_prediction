@@ -91,7 +91,7 @@ export const Xai: React.FC = () => {
   // Bitmask -> 3 nhóm modality (Bio + Geom + SpliceAI luôn đi cùng nhau)
   const modules = useMemo(() => maskToAblationState(validMask), [validMask])
   const moduleRows = [
-    { label: "DNA Sequence (NT-v1 500M)", active: modules.dnaFeatures, icon: Binary, tone: "text-blue-500", on: "bg-blue-50 text-blue-700" },
+    { label: "DNA Sequence (NTv1-500M)", active: modules.dnaFeatures, icon: Binary, tone: "text-blue-500", on: "bg-blue-50 text-blue-700" },
     { label: "Protein Sequence (ESM-1b 650M)", active: modules.proteinFeatures, icon: Dna, tone: "text-purple-500", on: "bg-purple-50 text-purple-700" },
     { label: "Bio + Geom + SpliceAI", active: modules.bioGeomFeatures, icon: Flame, tone: "text-amber-500", on: "bg-amber-50 text-amber-700" },
   ]
