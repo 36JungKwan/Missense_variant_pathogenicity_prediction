@@ -19,12 +19,12 @@ interface ModuleSpec {
 
 /** 3 nhóm khớp đúng 3 bit (use_dna, use_prot, use_biogeom) của checkpoint TriMVPP. */
 const MODULES: ModuleSpec[] = [
-  { key: "dnaFeatures", title: "DNA Sequence", model: "NT-v1 500M", detail: "1001 bp window, 33 ref/alt tokens",
+  { key: "dnaFeatures", title: "DNA Sequence", model: "NTv1-500M", detail: "1001 bp window, 33 ref/alt tokens",
     icon: Binary, iconClass: "text-blue-500" },
   { key: "proteinFeatures", title: "Protein Sequence", model: "ESM-1b 650M", detail: "501 aa window, 33 ref/alt tokens",
     icon: Dna, iconClass: "text-purple-500" },
   { key: "bioGeomFeatures", title: "Bio + Geom + SpliceAI", model: "28 tabular features",
-    detail: "11 conservation/AF + 9 SpliceAI + 8 manifold geometry (LVD/LID)", icon: Flame, iconClass: "text-amber-500" },
+    detail: "11 conservation/AF + 9 SpliceAI + 8 latent geometry (LVD/LID)", icon: Flame, iconClass: "text-amber-500" },
 ]
 
 interface FeatureAblationPanelProps {

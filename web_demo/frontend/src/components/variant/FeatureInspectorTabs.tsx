@@ -51,7 +51,7 @@ export const FeatureInspectorTabs: React.FC<FeatureInspectorTabsProps> = ({
             }`}
           >
             <Compass className="h-3.5 w-3.5" />
-            Manifold Geometry (8)
+            Latent Geometry (8)
           </button>
 
           <button

@@ -70,7 +70,7 @@ export const Home: React.FC = () => {
         <div className="relative z-10 max-w-3xl space-y-5 text-left">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur border border-white/20 text-xs font-medium text-blue-200">
             <Sparkles className="h-3.5 w-3.5 text-blue-400" />
-            <span>Deep Learning &amp; Bioinformatics Hybrid Framework</span>
+            <span>Deep Learning &amp; Bioinformatics Framework</span>
           </div>
 
           <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
@@ -82,7 +82,7 @@ export const Home: React.FC = () => {
 
           <p className="text-base sm:text-lg text-slate-300 leading-relaxed max-w-2xl">
             AI-powered decision support system designed to accurately classify missense single-nucleotide variants. 
-            Integrates deep neural sequence representations with spatial geometry LVD embeddings and multi-modal biological functional annotations.
+            Integrates deep neural sequence representations with latent geometry descriptors (LVD, LID) and multimodal biological annotations.
           </p>
 
         </div>
@@ -179,7 +179,7 @@ export const Home: React.FC = () => {
               <span>1. Multi-modal Feature Extraction</span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Combines three branches: DNA sequence tokens (NT-v1), protein sequence tokens (ESM-1b), and 28 biological, SpliceAI and latent-geometry features.
+              Combines three branches: DNA sequence tokens (NTv1-500M), protein sequence tokens (ESM-1b 650M), and 28 biological, SpliceAI and latent-geometry features.
             </p>
           </div>
 
