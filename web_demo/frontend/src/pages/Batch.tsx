@@ -32,7 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-import { BatchVariant, AblationState } from "@/types"
+import { BatchVariant, AblationState, RejectedVariant } from "@/types"
 import { createVcfStreamService, BatchStreamEvent } from "@/services/api"
 
 const STORAGE_KEY = "trimvpp_batch_state"
@@ -51,6 +51,68 @@ function formatDuration(ms: number): string {
   const s = total % 60
   const pad = (n: number) => String(n).padStart(2, "0")
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+}
+
+/** Lưu trạng thái trang vào sessionStorage; vượt dung lượng thì chỉ giữ các dòng mới nhất. */
+function saveSnapshot(snapshot: { streamedVariants: BatchVariant[] } & Record<string, unknown>): void {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  } catch {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        ...snapshot, streamedVariants: snapshot.streamedVariants.slice(0, TABLE_ROW_LIMIT),
+      }))
+    } catch {
+      // bộ nhớ bị chặn: bỏ qua, trang vẫn chạy bình thường
+    }
+  }
+}
+
+/** Mốc thời gian theo khối do backend báo (stream_status), dùng để ước tính thời gian còn lại. */
+interface ChunkTimeline {
+  chunkSize: number
+  totalChunks: number
+  totalVariants: number
+  /** thời điểm bắt đầu phân loại của từng khối (1-based) */
+  classifyStart: Record<number, number>
+  /** khối mà GPU phải chờ VEP + SpliceAI xong mới chạy được */
+  waited: Record<number, boolean>
+}
+
+/**
+ * Ước tính thời gian còn lại theo đúng cách backend chạy: khối k+1 được chú giải (CPU) trong lúc khối k được
+ * phân loại (GPU), nên mỗi khối bắt đầu phân loại khi cả hai việc đó xong. Tốc độ chú giải lấy từ khối đầu
+ * (và các khối phải chờ), tốc độ phân loại lấy từ khối đang chạy.
+ */
+function estimateRemainingMs(tl: ChunkTimeline, startedAt: number, now: number, processed: number): number | null {
+  const started = Object.keys(tl.classifyStart).map(Number).sort((a, b) => a - b)
+  if (started.length === 0) return null
+  const size = (k: number) => Math.max(0, Math.min(tl.chunkSize, tl.totalVariants - (k - 1) * tl.chunkSize))
+  const current = started[started.length - 1]
+
+  let annotatePerVariant = started[0] === 1 ? (tl.classifyStart[1] - startedAt) / Math.max(1, size(1)) : 0
+  for (const k of started) {
+    if (k > 1 && tl.waited[k] && tl.classifyStart[k - 1] !== undefined) {
+      annotatePerVariant = Math.max(annotatePerVariant, (tl.classifyStart[k] - tl.classifyStart[k - 1]) / Math.max(1, size(k)))
+    }
+  }
+
+  const doneInCurrent = processed - (current - 1) * tl.chunkSize
+  let classifyPerVariant: number | null = null
+  if (doneInCurrent > 0) {
+    classifyPerVariant = (now - tl.classifyStart[current]) / doneInCurrent
+  } else if (tl.classifyStart[current - 1] !== undefined) {
+    classifyPerVariant = (tl.classifyStart[current] - tl.classifyStart[current - 1]) / Math.max(1, size(current - 1))
+  }
+  if (classifyPerVariant === null) return null
+
+  let classifyBegin = tl.classifyStart[current]
+  let classifyEnd = classifyBegin + classifyPerVariant * size(current)
+  for (let k = current + 1; k <= tl.totalChunks; k++) {
+    classifyBegin = Math.max(classifyBegin + annotatePerVariant * size(k), classifyEnd)
+    classifyEnd = classifyBegin + classifyPerVariant * size(k)
+  }
+  return Math.max(0, classifyEnd - now)
 }
 
 export const Batch: React.FC = () => {
@@ -86,6 +148,8 @@ export const Batch: React.FC = () => {
 
   const [streamedVariants, setStreamedVariants] = useState<BatchVariant[]>(savedState?.streamedVariants || [])
   const [dangerQueue, setDangerQueue] = useState<BatchVariant[]>(savedState?.dangerQueue || [])
+  const [rejectedVariants, setRejectedVariants] = useState<RejectedVariant[]>(savedState?.rejectedVariants || [])
+  const [timeline, setTimeline] = useState<ChunkTimeline | null>(null)
 
   // Ablation: 3 nhóm (DNA, Protein, Bio+Geom+SpliceAI); chuyển đổi tự động từ trạng thái 4 công tắc cũ.
   const [ablation, setAblation] = useState<AblationState>(normalizeAblationState(savedState?.ablation))
@@ -102,31 +166,20 @@ export const Batch: React.FC = () => {
   const [newestId, setNewestId] = useState<number | null>(null)
 
   const streamServiceRef = useRef<{ cancel: () => void } | null>(null)
+  // Trạng thái mới nhất, để ghi ngay khi rời trang (bản ghi gộp bên dưới có thể chưa kịp chạy).
+  const latestSnapshotRef = useRef<Parameters<typeof saveSnapshot>[0] | null>(null)
 
   // --- 3. Lưu State vào SessionStorage (gộp ghi khi đang stream để không serialize hàng nghìn dòng mỗi sự kiện) ---
   useEffect(() => {
-    const save = () => {
-      const snapshot = { progress, stats, streamedVariants, dangerQueue, ablation, runMask }
-      try {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
-      } catch {
-        try {
-          // Vượt dung lượng sessionStorage: chỉ giữ các dòng mới nhất (CSV trong phiên hiện tại vẫn đủ).
-          sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-            ...snapshot, streamedVariants: streamedVariants.slice(0, TABLE_ROW_LIMIT),
-          }))
-        } catch {
-          // bộ nhớ bị chặn: bỏ qua, trang vẫn chạy bình thường
-        }
-      }
-    }
+    const snapshot = { progress, stats, streamedVariants, dangerQueue, rejectedVariants, ablation, runMask }
+    latestSnapshotRef.current = snapshot
     if (!isStreaming) {
-      save()
+      saveSnapshot(snapshot)
       return
     }
-    const timer = window.setTimeout(save, 1500)
+    const timer = window.setTimeout(() => saveSnapshot(snapshot), 1500)
     return () => window.clearTimeout(timer)
-  }, [progress, stats, streamedVariants, dangerQueue, ablation, runMask, isStreaming])
+  }, [progress, stats, streamedVariants, dangerQueue, rejectedVariants, ablation, runMask, isStreaming])
 
   // Đồng hồ thời gian đã chạy
   useEffect(() => {
@@ -159,12 +212,15 @@ export const Batch: React.FC = () => {
     return () => window.removeEventListener("beforeunload", handler)
   }, [isStreaming])
 
-  // Cleanup on unmount
+  // Rời trang: huỷ stream và ghi ngay kết quả đã nhận để khi quay lại vẫn còn.
   useEffect(() => {
+    const service = streamServiceRef
+    const latest = latestSnapshotRef
     return () => {
-      if (streamServiceRef.current) {
-        streamServiceRef.current.cancel()
+      if (service.current) {
+        service.current.cancel()
       }
+      if (latest.current) saveSnapshot(latest.current)
     }
   }, [])
 
@@ -181,6 +237,7 @@ export const Batch: React.FC = () => {
     setStatusText(null)
     setStreamedVariants([])
     setDangerQueue([])
+    setRejectedVariants([])
     setProgress(0)
     setStats({ totalProcessed: 0, missenseAccepted: 0, nonMissenseRejected: 0 })
   }
@@ -212,11 +269,13 @@ export const Batch: React.FC = () => {
     // Luôn dọn sạch bảng kết quả cũ trước khi bắt đầu một phiên stream mới
     setStreamedVariants([])
     setDangerQueue([])
+    setRejectedVariants([])
     setProgress(0)
     setStats({ totalProcessed: 0, missenseAccepted: 0, nonMissenseRejected: 0 })
     setStreamError(null)
     setStatusText("Uploading and parsing the variant list...")
     setTotalVariants(null)
+    setTimeline(null)
     setNewestId(null)
     const startTime = currentTimeMs()
     setStartedAt(startTime)
@@ -243,11 +302,24 @@ export const Batch: React.FC = () => {
   }
 
   const handleStreamEvent = (event: BatchStreamEvent) => {
-    setProgress(event.progress_percent)
+    // Lỗi không phải là hoàn tất: giữ nguyên tiến độ đã đạt được.
+    if (event.type !== "stream_error") setProgress(event.progress_percent)
 
     if (event.type === "stream_status") {
       if (event.status) setStatusText(event.status)
       if (event.total_variants) setTotalVariants(event.total_variants)
+      const { chunk, total_chunks, total_variants, chunk_size, stage } = event
+      if (chunk && total_chunks && total_variants && chunk_size) {
+        const at = currentTimeMs()
+        setTimeline((prev) => {
+          const base: ChunkTimeline = prev ?? {
+            chunkSize: chunk_size, totalChunks: total_chunks, totalVariants: total_variants, classifyStart: {}, waited: {},
+          }
+          return stage === "classifying"
+            ? { ...base, classifyStart: { ...base.classifyStart, [chunk]: at } }
+            : { ...base, waited: { ...base.waited, [chunk]: true } }
+        })
+      }
 
     } else if (event.type === "variant_stream" && event.variant) {
       const newVariant = event.variant
@@ -269,6 +341,14 @@ export const Batch: React.FC = () => {
       }))
 
     } else if (event.type === "variant_skipped") {
+      if (event.variant_id) {
+        const rejected: RejectedVariant = {
+          variant_id: event.variant_id,
+          consequence: event.detected_consequence || "unknown",
+          reason: event.reason || "Rejected",
+        }
+        setRejectedVariants((prev) => [...prev, rejected])
+      }
       setStats(prev => ({
         ...prev,
         totalProcessed: prev.totalProcessed + 1,
@@ -289,19 +369,25 @@ export const Batch: React.FC = () => {
 
   // --- 5. Xuất file CSV ---
   const exportToCSV = () => {
-    if (streamedVariants.length === 0) return
+    if (streamedVariants.length === 0 && rejectedVariants.length === 0) return
 
-    const headers = ["ID", "Variant", "Gene", "Consequence", "Probability", "Classification", "ClinVar_GT", "AlphaMissense"]
-    const rows = streamedVariants.map(v => [
-      v.id,
-      v.variant_id,
-      v.gene || "N/A",
-      `"${v.consequence || "N/A"}"`,
-      v.trimvpp_probability,
-      v.classification,
-      v.clinvar_ground_truth,
-      v.sota_alphamissense ?? "N/A"
-    ])
+    const quote = (s: string) => `"${s.replace(/"/g, '""')}"`
+    const headers = ["ID", "Variant", "Gene", "Consequence", "Probability", "Classification", "ClinVar_GT", "AlphaMissense", "Rejection_Reason"]
+    const rows = [
+      ...streamedVariants.map(v => [
+        v.id,
+        v.variant_id,
+        v.gene || "N/A",
+        quote(v.consequence || "N/A"),
+        v.trimvpp_probability,
+        v.classification,
+        v.clinvar_ground_truth,
+        v.sota_alphamissense ?? "N/A",
+        "",
+      ]),
+      // Biến thể bị loại: không có xác suất, ghi lý do để người dùng biết cần sửa gì.
+      ...rejectedVariants.map(r => ["", r.variant_id, "", quote(r.consequence), "", "Rejected", "", "", quote(r.reason)]),
+    ]
 
     const csv = [headers.join(","), ...rows.map(e => e.join(","))].join("\n")
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
@@ -313,6 +399,10 @@ export const Batch: React.FC = () => {
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
   }
+
+  const etaMs = isStreaming && timeline && startedAt !== null
+    ? estimateRemainingMs(timeline, startedAt, now, stats.totalProcessed)
+    : null
 
   return (
     <div className="space-y-6 text-left pb-10">
@@ -440,8 +530,8 @@ export const Batch: React.FC = () => {
                     <span className="flex items-center gap-1.5 font-mono text-slate-600">
                       <Timer className="h-3.5 w-3.5" />
                       {formatDuration(now - startedAt)} elapsed
-                      {totalVariants && stats.totalProcessed > 0 && stats.totalProcessed < totalVariants && (
-                        <> · ~{formatDuration(((now - startedAt) / stats.totalProcessed) * (totalVariants - stats.totalProcessed))} left</>
+                      {totalVariants && stats.totalProcessed < totalVariants && etaMs !== null && (
+                        <> · ~{formatDuration(etaMs)} left</>
                       )}
                     </span>
                   )}
@@ -508,7 +598,7 @@ export const Batch: React.FC = () => {
                 </Badge>
                 <Button 
                   onClick={exportToCSV}
-                  disabled={streamedVariants.length === 0}
+                  disabled={streamedVariants.length === 0 && rejectedVariants.length === 0}
                   size="sm" 
                   variant="outline" 
                   className="h-7 text-xs border-indigo-200 text-indigo-700 hover:bg-indigo-50"
@@ -632,6 +722,48 @@ export const Batch: React.FC = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Biến thể bị loại kèm lý do (không phải missense, REF sai, toạ độ không hợp lệ...) */}
+      {rejectedVariants.length > 0 && (
+        <Card className="border-slate-200 shadow-sm overflow-hidden">
+          <CardHeader className="py-4 border-b border-slate-100 bg-slate-50/50">
+            <CardTitle className="text-sm flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-rose-600" />
+                Rejected Variants
+              </span>
+              <Badge variant="secondary" className="font-mono text-xs">{rejectedVariants.length} Items</Badge>
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Not classified: the variant is not missense or its coordinates are invalid. Included in the CSV export.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 max-h-[260px] overflow-auto">
+            <Table>
+              <TableHeader className="sticky top-0 bg-white/95 backdrop-blur shadow-sm z-10">
+                <TableRow>
+                  <TableHead>Variant</TableHead>
+                  <TableHead>Detected</TableHead>
+                  <TableHead>Reason</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rejectedVariants.slice(0, TABLE_ROW_LIMIT).map((r, i) => (
+                  <TableRow key={`${r.variant_id}-${i}`}>
+                    <TableCell className="font-mono text-xs text-slate-700 whitespace-nowrap">{r.variant_id}</TableCell>
+                    <TableCell className="text-xs">
+                      <Badge variant="outline" className="font-mono text-[10px] border-rose-200 text-rose-700">
+                        {r.consequence}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-slate-600">{r.reason}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
       </div>
       </div>
     </div>

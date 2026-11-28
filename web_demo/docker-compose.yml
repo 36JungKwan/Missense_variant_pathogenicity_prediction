@@ -3,16 +3,17 @@ services:
     image: pgvector/pgvector:pg16
     container_name: rbnet_postgres
     restart: unless-stopped
+    # Credentials are read from .env next to this file (copy .env.example to .env).
     environment:
-      POSTGRES_USER: rbnet_user
-      POSTGRES_PASSWORD: rbnet_secret_password
-      POSTGRES_DB: rbnet_genomics
+      POSTGRES_USER: ${POSTGRES_USER:-rbnet_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env next to docker-compose.yml (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-rbnet_genomics}
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rbnet_user -d rbnet_genomics"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5

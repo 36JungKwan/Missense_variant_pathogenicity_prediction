@@ -51,6 +51,37 @@ def preload() -> None:
     _get_proteome()
 
 
+GRCH38_CHROMOSOMES = {str(i) for i in range(1, 23)} | {"X", "Y", "MT"}
+
+
+def validate_coordinates(variant: VariantKey) -> None:
+    """Kiểm tra toạ độ TRƯỚC khi gọi VEP (chỉ đọc FASTA, vài micro giây): REF khác ALT, nhiễm sắc thể có trong
+    GRCh38, vị trí nằm trong nhiễm sắc thể, REF khớp hg38. Toạ độ sai được báo đúng lý do thay vì để VEP trả về
+    một consequence gây hiểu nhầm (intergenic, not_annotated...)."""
+    vid = variant.variant_id
+    if variant.ref == variant.alt:
+        raise InvalidVariantError(f"{vid}: REF and ALT alleles are identical, so this is not a variant.")
+    genome = _get_genome()
+    if variant.chrom not in GRCH38_CHROMOSOMES or variant.chrom not in genome:
+        raise InvalidVariantError(
+            f"{vid}: chromosome '{variant.chrom}' does not exist in GRCh38 (expected 1-22, X, Y or MT)."
+        )
+    contig = genome[variant.chrom]
+    length = len(contig)
+    end = variant.pos - 1 + len(variant.ref)
+    if variant.pos < 1 or end > length:
+        raise InvalidVariantError(
+            f"{vid}: position {variant.pos:,} is outside chromosome {variant.chrom} (length {length:,} bp)."
+        )
+    base = str(contig[variant.pos - 1:end]).upper()
+    if base != variant.ref:
+        raise InvalidVariantError(
+            f"{vid}: REF allele '{variant.ref}' does not match hg38 base '{base}' at chr{variant.chrom}:{variant.pos}. "
+            "Check the genome build (GRCh38 required).",
+            genome_base=base,
+        )
+
+
 def _centered_window(sequence_length: int, center0: int, window: int) -> Tuple[int, int, int, int]:
     """Trả (start, end, pad_left, pad_right) cho cửa sổ [center-half, center+half]."""
     half = window // 2

@@ -16,6 +16,7 @@ from app.db.session import get_db, SessionLocal
 from app.schemas.single import SingleVariantRequest, SingleVariantResponse
 from app.schemas.batch import BatchVariant, BatchStreamEvent
 from app.services.upload_parser import parse_uploaded_variants
+from app.services.sequence_service import validate_coordinates
 from app.services.inference_service import (
     prefetch_annotations,
     prepare_features_batch,
@@ -93,9 +94,30 @@ def _create_batch_sse_response(
             # File được chia thành các khối BATCH_CHUNK_VARIANTS biến thể. Mỗi khối: VEP + SpliceAI -> FM (micro-batch
             # FM_BATCH_VARIANTS) -> dự đoán -> gửi kết quả ngay. VEP + SpliceAI của khối kế tiếp chạy song song (thread
             # + session riêng) trong lúc GPU xử lý khối hiện tại, nên tổng thời gian gần bằng thời gian VEP.
-            keys = [parse_variant_id(vid) for vid in variant_queue]
+            # Toạ độ sai (REF = ALT, nhiễm sắc thể/vị trí không tồn tại, REF lệch hg38) bị loại ngay, trước VEP.
+            def _split_valid(all_keys):
+                valid, invalid = [], []
+                for k in all_keys:
+                    try:
+                        validate_coordinates(k)
+                        valid.append(k)
+                    except InvalidVariantError as exc:
+                        invalid.append((k, exc))
+                return valid, invalid
+
+            keys, invalid_keys = await asyncio.to_thread(
+                _split_valid, [parse_variant_id(vid) for vid in variant_queue]
+            )
+            done = 0
+            for key, exc in invalid_keys:
+                done += 1
+                rejected_count += 1
+                yield _event(type="variant_skipped", progress_percent=int(done / total_count * 100),
+                             variant_id=key.variant_id, detected_consequence="invalid_variant",
+                             reason=exc.message, error_code=exc.error_code)
+
             block = max(1, settings.BATCH_CHUNK_VARIANTS)
-            blocks = [keys[i:i + block] for i in range(0, total_count, block)]
+            blocks = [keys[i:i + block] for i in range(0, len(keys), block)]
             n_blocks = len(blocks)
 
             def _prefetch_block(block_keys):
@@ -113,11 +135,11 @@ def _create_batch_sse_response(
 
             def _status(index: int, stage: str, message: str) -> dict:
                 return _event(type="stream_status", progress_percent=int(done / total_count * 100), stage=stage,
-                              chunk=index + 1, total_chunks=n_blocks, total_variants=total_count, status=message)
+                              chunk=index + 1, total_chunks=n_blocks, total_variants=len(keys), chunk_size=block,
+                              status=message)
 
-            done = 0
             chunk_size = max(1, settings.FM_BATCH_VARIANTS)
-            pending_prefetch = _start_prefetch(0)
+            pending_prefetch = _start_prefetch(0) if blocks else None
             for block_index, block_keys in enumerate(blocks):
                 if not pending_prefetch.done():
                     yield _status(block_index, "annotating",
