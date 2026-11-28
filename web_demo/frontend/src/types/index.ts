@@ -186,6 +186,15 @@ export interface BatchStreamEvent {
   chunk?: number
   total_chunks?: number
   total_variants?: number
+  /** số biến thể mỗi khối (khối cuối có thể ít hơn) */
+  chunk_size?: number
+}
+
+/** Biến thể bị loại trong Batch (gatekeeper hoặc toạ độ không hợp lệ) kèm lý do. */
+export interface RejectedVariant {
+  variant_id: string
+  consequence: string
+  reason: string
 }
 
 /** Dạng lỗi thống nhất của backend: {"detail": {...}}. */

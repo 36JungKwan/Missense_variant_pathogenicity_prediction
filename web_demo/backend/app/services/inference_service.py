@@ -36,6 +36,7 @@ from app.services.feature_pipeline import (
     lookup_spliceai,
     refresh_imputed_geometry,
 )
+from app.services.sequence_service import validate_coordinates
 from app.services.vep_runner import VepRecord, annotate_variants, ensure_missense
 
 logger = logging.getLogger("app.services.inference")
@@ -169,7 +170,9 @@ def _load_stored(db: Session, variant_id: str) -> Tuple[Variant, InferenceFeatur
 
 def _extract_and_store(db: Session, key: VariantKey, prefetched: Optional[Prefetched]) -> Tuple[Variant, InferenceFeature]:
     """Thứ tự cố định: VEP -> Missense Gatekeeper -> (chỉ khi là missense) cửa sổ + NT-v1 + ESM-1b + SpliceAI.
-    Biến thể bị loại không tốn GPU/SpliceAI."""
+    Biến thể bị loại không tốn GPU/SpliceAI. Toạ độ sai (REF = ALT, nhiễm sắc thể/vị trí không tồn tại, REF lệch hg38)
+    bị loại trước cả VEP."""
+    validate_coordinates(key)
     record = prefetched.vep.get(key.variant_id) if prefetched else None
     if record is None:
         record = annotate_variants([key])[key.variant_id]

@@ -30,3 +30,4 @@ class BatchStreamEvent(BaseModel):
     chunk: Optional[int] = None
     total_chunks: Optional[int] = None
     total_variants: Optional[int] = None
+    chunk_size: Optional[int] = None  # số biến thể mỗi khối (khối cuối có thể ít hơn), để frontend ước tính thời gian còn lại

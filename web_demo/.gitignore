@@ -14,10 +14,16 @@ venv/
 *.egg-info/
 
 # ---- Model weights & large artifacts (copy manually, see backend/artifacts) ----
-backend/artifacts/*.pth
+*.pth
+*.pt
 backend/artifacts/faiss_indexes/
 *.index
 *.safetensors
+*.parquet
+*.vcf
+
+# ---- Local test material (kept on the developer machine only) ----
+docs/acceptance_testing/
 
 # ---- Node / Vite ----
 frontend/node_modules/
